@@ -1,0 +1,13 @@
+[submodule "ext/glm"]
+	path = ext/glm
+	url = https://github.com/g-truc/glm.git
+[submodule "ext/gsl-lite"]
+	path = ext/gsl-lite
+	url = https://github.com/martinmoene/gsl-lite
+[submodule "ext/shaderc"]
+	path = ext/shaderc
+	url = https://github.com/google/shaderc
+	branch = known-good
+[submodule "ext/turf"]
+	path = ext/turf
+	url = https://github.com/preshing/turf.git
