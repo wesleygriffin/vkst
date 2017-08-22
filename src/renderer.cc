@@ -1492,22 +1492,18 @@ VkFence renderer::create_fence(bool signaled, std::error_code& ec) noexcept {
 
 void renderer::wait(gsl::span<VkFence> fences, bool wait_all, uint64_t timeout,
                     std::error_code& ec) noexcept {
-  LOG_ENTER;
   ec.clear();
   VkResult rslt =
     vkWaitForFences(_device, gsl::narrow_cast<uint32_t>(fences.size()),
                     fences.data(), wait_all, timeout);
   if (rslt != VK_SUCCESS) ec.assign(rslt, vk::result_category());
-  LOG_LEAVE;
 } // renderer::wait
 
 void renderer::reset(gsl::span<VkFence> fences, std::error_code& ec) noexcept {
-  LOG_ENTER;
   ec.clear();
   VkResult rslt = vkResetFences(
     _device, gsl::narrow_cast<uint32_t>(fences.size()), fences.data());
   if (rslt != VK_SUCCESS) ec.assign(rslt, vk::result_category());
-  LOG_LEAVE;
 } // renderer::reset
 
 void renderer::destroy(VkFence fence) noexcept {
