@@ -7,7 +7,7 @@
 
 static plat::file_handle s_fh;
 
-void plat::init_logging(std::experimental::filesystem::path logfile,
+void plat::init_logging(plat::filesystem::path logfile,
                         std::error_code& ec) noexcept {
   if (!s_fh) {
     s_fh = file_handle::open(logfile, file_handle::open_modes::write, ec);

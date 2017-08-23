@@ -1,9 +1,9 @@
 #include "file_handle.h"
 #include <cstdio>
 
-plat::file_handle
-plat::file_handle::open(std::experimental::filesystem::path const& path,
-                        open_modes mode, std::error_code& ec) noexcept {
+plat::file_handle plat::file_handle::open(plat::filesystem::path const& path,
+                                          open_modes mode,
+                                          std::error_code& ec) noexcept {
   std::string mode_str = "";
   if ((mode & open_modes::read) == open_modes::read) mode_str += "r";
   if ((mode & open_modes::write) == open_modes::write) mode_str += "w";

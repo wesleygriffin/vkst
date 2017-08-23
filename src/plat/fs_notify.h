@@ -1,8 +1,8 @@
 #ifndef VKST_PLAT_FS_NOTIFY_H
 #define VKST_PLAT_FS_NOTIFY_H
 
+#include <plat/filesystem.h>
 #include <turf/c/core.h>
-#include <filesystem>
 #include <functional>
 
 namespace plat {
@@ -20,11 +20,10 @@ public:
   }; // enum class actions
 
   using notify_delegate = std::function<void(
-    watch_id id, std::experimental::filesystem::path const&, actions action)>;
+    watch_id id, plat::filesystem::path const&, actions action)>;
 
-  watch_id add(std::experimental::filesystem::path path,
-               notify_delegate delegate, bool recursive,
-               std::error_code& ec) noexcept {
+  watch_id add(plat::filesystem::path path, notify_delegate delegate,
+               bool recursive, std::error_code& ec) noexcept {
     return reinterpret_cast<D*>(this)->do_add(std::move(path), delegate,
                                               recursive, ec);
   }

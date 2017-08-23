@@ -1,9 +1,9 @@
 #ifndef VKST_PLAT_LOG_H
 #define VKST_PLAT_LOG_H
 
+#include <plat/filesystem.h>
 #include <turf/c/core.h>
 #include <gsl.h>
-#include <filesystem>
 #include <string>
 
 namespace plat {
@@ -30,8 +30,7 @@ inline constexpr gsl::czstring to_string(log_severities severity) noexcept {
   }
 }
 
-void init_logging(std::experimental::filesystem::path logfile,
-                  std::error_code& ec) noexcept;
+void init_logging(plat::filesystem::path logfile, std::error_code& ec) noexcept;
 
 void log(log_severities severity, gsl::czstring fmt, ...) noexcept;
 

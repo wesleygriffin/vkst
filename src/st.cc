@@ -1,8 +1,12 @@
+#include <plat/core.h>
 #include <plat/fs_notify.h>
 #include <plat/log.h>
 #include "renderer.h"
+PLAT_PUSH_WARNING
+PLAT_MSVC_DISABLE_WARNING(4201)
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+PLAT_POP_WARNING
 #include <array>
 #include <chrono>
 #include <cstdlib>

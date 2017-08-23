@@ -16,7 +16,7 @@ public:
   class watch {
   public:
     OVERLAPPED overlapped{};
-    std::experimental::filesystem::path path{};
+    plat::filesystem::path path{};
     notify_delegate delegate{};
     bool recursive{false};
     HANDLE handle{INVALID_HANDLE_VALUE};
@@ -25,11 +25,9 @@ public:
     bool stop{false};
 
     bool refresh(bool clear = false) noexcept;
-    void notify(std::experimental::filesystem::path changed_path,
-                DWORD action) noexcept;
+    void notify(plat::filesystem::path changed_path, DWORD action) noexcept;
 
-    watch(std::experimental::filesystem::path p, notify_delegate d,
-          bool r) noexcept
+    watch(plat::filesystem::path p, notify_delegate d, bool r) noexcept
     : path{std::move(p)}, delegate{std::move(d)}, recursive{r} {}
 
     watch() = default;
@@ -41,7 +39,7 @@ public:
 private:
   std::vector<gsl::unique_ptr<watch>> _watches;
 
-  watch_id do_add(std::experimental::filesystem::path path,
+  watch_id do_add(plat::filesystem::path path,
                   impl::fs_notify<fs_notify>::notify_delegate delegate,
                   bool recursive, std::error_code& ec) noexcept;
 

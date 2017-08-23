@@ -1,6 +1,7 @@
 #ifndef VKST_RENDERER_H
 #define VKST_RENDERER_H
 
+#include <plat/filesystem.h>
 #include <wsi/window.h>
 #include <vk/result.h>
 #include <gsl.h>
@@ -132,7 +133,7 @@ public:
     fragment = 1,
   }; // enum class enum shader_types
 
-  VkShaderModule create_shader(std::experimental::filesystem::path const& path,
+  VkShaderModule create_shader(plat::filesystem::path const& path,
                                shader_types type, std::error_code& ec) noexcept;
 
   void destroy(VkShaderModule shader) noexcept;

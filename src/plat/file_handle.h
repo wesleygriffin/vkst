@@ -1,9 +1,9 @@
 #ifndef VKST_PLAT_FILE_HANDLE_H
 #define VKST_PLAT_FILE_HANDLE_H
 
+#include <plat/filesystem.h>
 #include <turf/c/core.h>
 #include <gsl.h>
-#include <filesystem>
 
 namespace plat {
 
@@ -16,8 +16,8 @@ public:
     append = 0x4,
   }; // enum class open_modes
 
-  static file_handle open(std::experimental::filesystem::path const& path,
-                          open_modes mode, std::error_code& ec) noexcept;
+  static file_handle open(plat::filesystem::path const& path, open_modes mode,
+                          std::error_code& ec) noexcept;
 
   file_handle() noexcept = default;
 

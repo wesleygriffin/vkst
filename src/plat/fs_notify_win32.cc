@@ -1,4 +1,5 @@
 #include "fs_notify.h"
+#include "core.h"
 
 #if TURF_TARGET_WIN32
 static void CALLBACK WatchCallback(DWORD dwErrorCode,
@@ -30,8 +31,8 @@ static void CALLBACK WatchCallback(DWORD dwErrorCode,
     fn[count] = TEXT('\0');
 #endif // UNICODE
 
-    if (std::experimental::filesystem::is_directory(w->path) ||
-        (w->path.filename() == std::experimental::filesystem::path{fn})) {
+    if (plat::filesystem::is_directory(w->path) ||
+        (w->path.filename() == plat::filesystem::path{fn})) {
       w->notify(fn, n->Action);
     }
   } while (n->NextEntryOffset != 0);
@@ -48,8 +49,8 @@ bool plat::fs_notify::watch::refresh(bool clear) noexcept {
             NULL, &overlapped, clear ? 0 : WatchCallback) != 0);
 } // plat::fs_notify::watch::refresh
 
-void plat::fs_notify::watch::notify(
-  std::experimental::filesystem::path changed_path, DWORD action) noexcept {
+void plat::fs_notify::watch::notify(plat::filesystem::path changed_path,
+                                    DWORD action) noexcept {
   actions act;
   switch(action) {
   case FILE_ACTION_RENAMED_NEW_NAME: // FALLTHROUGH
@@ -63,6 +64,8 @@ void plat::fs_notify::watch::notify(
   case FILE_ACTION_MODIFIED:
     act = actions::modified;
     break;
+  default:
+    PLAT_MARK_UNREACHABLE;
   }
   delegate(id, changed_path, act);
 } // plat::fs_notify::watch::notify
@@ -77,7 +80,7 @@ plat::fs_notify::watch::~watch() noexcept {
 } // plat::fs_notify::watch::~watch
 
 plat::fs_notify::watch_id
-plat::fs_notify::do_add(std::experimental::filesystem::path path,
+plat::fs_notify::do_add(plat::filesystem::path path,
                         impl::fs_notify<fs_notify>::notify_delegate delegate,
                         bool recursive, std::error_code& ec) noexcept {
   auto w = gsl::make_unique<watch>(std::move(path), delegate, recursive);

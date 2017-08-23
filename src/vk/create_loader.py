@@ -228,6 +228,11 @@ std::string vk::loader_result_category_impl::message(int ev) const {
   case vk::loader_result::no_library: return "No library";
   case vk::loader_result::no_function: return "No function";
   }
+#ifdef TURF_COMPILER_MSVC
+  __assume(0);
+#else
+  __builtin_unreachable();
+#endif
 } // vk::loader_result_category_impl::message
 
 std::error_category const& vk::loader_result_category() {

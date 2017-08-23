@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include <plat/core.h>
 #include <plat/file_io.h>
 #include <plat/log.h>
 #include <shaderc/shaderc.hpp>
@@ -101,6 +102,7 @@ std::string renderer_result_category_impl::message(int ev) const {
   case renderer_result::surface_not_supported: return "Surface not supported";
   case renderer_result::no_memory_type: return "No memory type";
   }
+  PLAT_MARK_UNREACHABLE;
 } // renderer_result_category_impl::message
 
 std::error_category const& renderer_result_category() {
@@ -1287,16 +1289,16 @@ public:
                                      const char* requesting_source,
                                      size_t /*include_depth*/) override {
     if (type == shaderc_include_type_relative) {
-      std::experimental::filesystem::path parent{requesting_source};
+      plat::filesystem::path parent{requesting_source};
       parent = parent.parent_path();
       _include_paths.push_back(parent / requested_source);
     } else {
       _include_paths.push_back(requested_source);
     }
-    std::experimental::filesystem::path& path = _include_paths.back();
+    plat::filesystem::path& path = _include_paths.back();
 
     try {
-      if (!std::experimental::filesystem::exists(path)) { path.clear(); }
+      if (!plat::filesystem::exists(path)) path.clear();
     } catch (...) { path.clear(); }
 
     if (!path.empty()) {
@@ -1334,13 +1336,13 @@ public:
   } // ReleaseInclude
 
 private:
-  std::vector<std::experimental::filesystem::path> _include_paths{};
+  std::vector<plat::filesystem::path> _include_paths{};
   std::vector<std::string> _include_sources{};
   std::vector<shaderc_include_result*> _include_results{};
 }; // class shader_includer
 
 static std::vector<uint32_t>
-compile_shader(std::experimental::filesystem::path const& path,
+compile_shader(plat::filesystem::path const& path,
                shaderc_shader_kind kind, std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
@@ -1372,15 +1374,16 @@ compile_shader(std::experimental::filesystem::path const& path,
   return code;
 } // compile_shader
 
-VkShaderModule
-renderer::create_shader(std::experimental::filesystem::path const& path,
-                        shader_types type, std::error_code& ec) noexcept {
+VkShaderModule renderer::create_shader(plat::filesystem::path const& path,
+                                       shader_types type,
+                                       std::error_code& ec) noexcept {
   LOG_ENTER;
 
   auto const kind = [&type]() {
     switch(type) {
     case shader_types::vertex: return shaderc_vertex_shader;
     case shader_types::fragment: return shaderc_fragment_shader;
+    default: PLAT_MARK_UNREACHABLE;
     }
   }();
 

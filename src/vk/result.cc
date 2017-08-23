@@ -1,4 +1,5 @@
 #include "result.h"
+#include <plat/core.h>
 
 namespace std {
 
@@ -43,6 +44,7 @@ std::string vk::result_category_impl::message(int ev) const {
   case vk::result::error_invalid_external_handle_khx:
     return "Invalid external handle";
   }
+  PLAT_MARK_UNREACHABLE;
 } // vk::result_category_impl::message
 
 std::error_category const& vk::result_category() {
@@ -59,6 +61,7 @@ std::string vk::shaderc_result_category_impl::message(int ev) const {
   case vk::shaderc_result::null_result_object: return "Null result object";
   case vk::shaderc_result::invalid_assembly: return "Invalid assembly";
   }
+  PLAT_MARK_UNREACHABLE;
 } // vk::shaderc_result_category_impl::message
 
 std::error_category const& vk::shaderc_result_category() {

@@ -1,9 +1,8 @@
 #include "file_io.h"
 #include "file_handle.h"
 
-std::vector<char>
-plat::read_file(std::experimental::filesystem::path const& path,
-                std::error_code& ec) noexcept {
+std::vector<char> plat::read_file(plat::filesystem::path const& path,
+                                  std::error_code& ec) noexcept {
   auto fh = plat::file_handle::open(path, plat::file_handle::open_modes::read, ec);
   if (ec) return {};
 
