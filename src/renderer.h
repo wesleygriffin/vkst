@@ -8,8 +8,9 @@
 #include <filesystem>
 #include <vector>
 
-class renderer;
-
+// Holds all of the data for a surface. This includes the swapchain,
+// renderpass, and framebuffers.
+// Surfaces must be resized when the window is resized.
 class surface {
 public:
   std::size_t num_images() const noexcept { return _color_images.size(); }
@@ -74,6 +75,8 @@ private:
   friend class renderer;
 }; // class surface
 
+// Convenience class to hold both the VkShaderModule for a shader as well as
+// any error message from compiling the shader.
 class shader {
 public:
   enum class types : uint8_t {
@@ -122,20 +125,40 @@ inline std::error_code make_error_code(renderer_result e) noexcept {
   return {static_cast<int>(e), renderer_result_category()};
 }
 
+// Holds all of the data for rendering. Also provides methods for creating
+// surfaces, shaders, pipelines, and command buffers, as well as submitting
+// command buffers for execution on the device.
 class renderer {
 public:
+  // Create a new renderer. If ec is true, then an error occurred during
+  // creation and the renderer object is in an invalid state.
   static renderer create(gsl::czstring application_name,
                          PFN_vkDebugReportCallbackEXT callback,
                          std::error_code& ec) noexcept;
 
+  // Create a new surface. If ec is true, then an error occurred during
+  // creation and the surface object is in an invalid state.
   surface create_surface(wsi::window const& window,
                          std::error_code& ec) noexcept;
 
+  // Resize a surface. Must be called when the window that was passed for
+  // surface creation is resized. This is not automatically done to allow
+  // the render loop to determine when to perform the resize. If ec is true,
+  // then an error occurred during the resize.
   void resize(surface& s, wsi::extent2d const& extent,
               std::error_code& ec) noexcept;
 
+  // Acquire the next ready image in the swapchain for rendering to. This
+  // must be called and the returned index passed to submit_present. If
+  // ec is true, then an error occurred and the returned index is invalid.
   uint32_t acquire_next_image(surface& s, std::error_code& ec) noexcept;
 
+  // Submit a set of command buffers for execution and then present the
+  // previously acquired swapchain image. image_index must come from an
+  // immediately preceding call to acquire_next_image. fence can be
+  // VK_NULL_HANDLE which indicates no fence should be signaled when the
+  // command buffers can be reused. If ec is true, then an error occurred
+  // during either the submit or present.
   void submit_present(gsl::span<VkCommandBuffer> buffers, surface& s,
                       uint32_t image_index, VkFence fence,
                       std::error_code& ec) noexcept;
@@ -146,19 +169,28 @@ private:
   void release(surface& s) noexcept;
 
 public:
+  // Allocate a set of command buffers. If ec is true, then an error occurred
+  // and the vector is invalid.
   std::vector<VkCommandBuffer>
   allocate_command_buffers(uint32_t count, std::error_code& ec) noexcept;
 
+  // Submit a set of command buffers. If ec is true, then an error occurred.
   void submit(std::vector<VkCommandBuffer>& command_buffers, bool onetime,
               std::error_code& ec) noexcept;
 
   void free(std::vector<VkCommandBuffer>& command_buffers) noexcept;
 
+  // Create a new shader from the given source code. path is expected to hold
+  // GLSL source code which will be compiled before creating the shader. If ec
+  // is true, then an error occurred and the shader is valid such that
+  // shader::error_message can be called to get any compilation errors.
   shader create_shader(plat::filesystem::path const& path, shader::types type,
                        std::error_code& ec) noexcept;
 
   void destroy(shader& s) noexcept;
 
+  // Create a new pipeline layout. If ec is true, then an error occurred and
+  // the pipeline layout object is invalid.
   VkPipelineLayout create_pipeline_layout(
     gsl::span<VkDescriptorSetLayout> descriptor_set_layouts,
     gsl::span<VkPushConstantRange> push_constant_ranges,
@@ -166,16 +198,31 @@ public:
 
   void destroy(VkPipelineLayout layout) noexcept;
 
+  // Create a new set of pipelines. A single pipeline can also be created.
+  // If ec is true, then an error occurred and the vector of pipelines is
+  // invalid.
   std::vector<VkPipeline>
   create_pipelines(gsl::span<VkGraphicsPipelineCreateInfo> cinfos,
                    std::error_code& ec) noexcept;
 
   void destroy(gsl::span<VkPipeline> pipes) noexcept;
 
+  // Create a new fence. If ec is true, then an error occurred and the fence
+  // is invalid.
   VkFence create_fence(bool signaled, std::error_code& ec) noexcept;
+
+  // Wait for a set of fences to be signaled. If wait_all is true, then all
+  // fences must be signaled before the call will return, if wait_all is
+  // false, then a single fence will cause the call to return. timeout
+  // specifies how long to wait, 0 returns immediately, and UINT64_MAX will
+  // wait indefinitely. If ec is true, and error occurred while waiting.
   void wait(gsl::span<VkFence> fences, bool wait_all, uint64_t timeout,
             std::error_code& ec) noexcept;
+
+  // Reset a set of fences from the signaled state to unsignaled. If ec is
+  // true then an error occured.
   void reset(gsl::span<VkFence> fences, std::error_code& ec) noexcept;
+
   void destroy(VkFence fence) noexcept;
 
   constexpr renderer() noexcept {};

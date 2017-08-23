@@ -219,6 +219,47 @@ static VkBool32 debug_report(VkDebugReportFlagsEXT flags,
   return VK_FALSE;
 }
 
+// Pre-record the command buffers to bind the pipeline and draw the vertices
+static void record_command_buffers(gsl::span<VkCommandBuffer> command_buffers,
+                                   VkPipeline pipeline) noexcept {
+  LOG_ENTER;
+
+  static VkCommandBufferBeginInfo cbinfo = {};
+  cbinfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  cbinfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+
+  // Use the renderpass from the surface
+  static VkRenderPassBeginInfo rbinfo = {};
+  rbinfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  rbinfo.renderPass = s_surface.render_pass();
+  rbinfo.renderArea.extent = {
+    gsl::narrow_cast<uint32_t>(s_window.size().width),
+    gsl::narrow_cast<uint32_t>(s_window.size().height)};
+  rbinfo.clearValueCount = gsl::narrow_cast<uint32_t>(s_clear_values.size());
+  rbinfo.pClearValues = s_clear_values.data();
+
+  for (std::size_t i = 0; i < command_buffers.size(); ++i) {
+    rbinfo.framebuffer = s_surface.framebuffer(i);
+
+    vkBeginCommandBuffer(command_buffers[i], &cbinfo);
+
+    vkCmdSetViewport(command_buffers[i], 0, 1, &s_surface.viewport());
+    vkCmdSetScissor(command_buffers[i], 0, 1, &s_surface.scissor());
+
+    vkCmdBeginRenderPass(command_buffers[i], &rbinfo,
+                         VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipeline);
+    vkCmdDraw(command_buffers[i], 3, 1, 0, 0);
+
+    vkCmdEndRenderPass(command_buffers[i]);
+    vkEndCommandBuffer(command_buffers[i]);
+  }
+
+  LOG_LEAVE;
+}
+
 static void init(std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
@@ -253,6 +294,8 @@ static void init(std::error_code& ec) noexcept {
 
   std::tie(s_vshader, s_fshader, s_layout, s_pipeline) = create_pipeline(ec);
   if (ec) return;
+
+  record_command_buffers(s_command_buffers, s_pipeline);
 
   LOG_LEAVE;
 } // init
@@ -323,47 +366,6 @@ static void draw() {
     }
   }
 } // draw
-
-// Pre-record the command buffers to bind the pipeline and draw the vertices
-static void record_command_buffers(gsl::span<VkCommandBuffer> command_buffers,
-                                   VkPipeline pipeline) noexcept {
-  LOG_ENTER;
-
-  static VkCommandBufferBeginInfo cbinfo = {};
-  cbinfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  cbinfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
-
-  // Use the renderpass from the surface
-  static VkRenderPassBeginInfo rbinfo = {};
-  rbinfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-  rbinfo.renderPass = s_surface.render_pass();
-  rbinfo.renderArea.extent = {
-    gsl::narrow_cast<uint32_t>(s_window.size().width),
-    gsl::narrow_cast<uint32_t>(s_window.size().height)};
-  rbinfo.clearValueCount = gsl::narrow_cast<uint32_t>(s_clear_values.size());
-  rbinfo.pClearValues = s_clear_values.data();
-
-  for (std::size_t i = 0; i < command_buffers.size(); ++i) {
-    rbinfo.framebuffer = s_surface.framebuffer(i);
-
-    vkBeginCommandBuffer(command_buffers[i], &cbinfo);
-
-    vkCmdSetViewport(command_buffers[i], 0, 1, &s_surface.viewport());
-    vkCmdSetScissor(command_buffers[i], 0, 1, &s_surface.scissor());
-
-    vkCmdBeginRenderPass(command_buffers[i], &rbinfo,
-                         VK_SUBPASS_CONTENTS_INLINE);
-
-    vkCmdBindPipeline(command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      pipeline);
-    vkCmdDraw(command_buffers[i], 3, 1, 0, 0);
-
-    vkCmdEndRenderPass(command_buffers[i]);
-    vkEndCommandBuffer(command_buffers[i]);
-  }
-
-  LOG_LEAVE;
-}
 
 static void resize() {
   LOG_ENTER;

@@ -173,21 +173,18 @@ find_physical(VkInstance instance, std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
-  uint32_t count;
-  VkResult rslt = vkEnumeratePhysicalDevices(instance, &count, nullptr);
+  std::array<VkPhysicalDevice, 4> devices;
+  uint32_t num_devices = gsl::narrow_cast<uint32_t>(devices.max_size());
+  VkResult rslt =
+    vkEnumeratePhysicalDevices(instance, &num_devices, devices.data());
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
     return {VK_NULL_HANDLE, UINT32_MAX};
   }
 
-  std::vector<VkPhysicalDevice> devices(count);
-  rslt = vkEnumeratePhysicalDevices(instance, &count, devices.data());
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return {VK_NULL_HANDLE, UINT32_MAX};
-  }
-
-  for (auto&& device : devices) {
+  for (uint32_t i = 0; i < num_devices; ++i) {
+    auto&& device = devices[i];
+    uint32_t count;
     vkGetPhysicalDeviceQueueFamilyProperties2KHR(device, &count, nullptr);
 
     std::vector<VkQueueFamilyProperties2KHR> families(count);
