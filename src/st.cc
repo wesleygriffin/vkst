@@ -1,3 +1,5 @@
+// Vulkan-based ShaderToy Example
+
 #include <plat/core.h>
 #include <plat/fs_notify.h>
 #include <plat/log.h>
@@ -15,17 +17,30 @@ PLAT_POP_WARNING
 static renderer s_renderer;
 static wsi::window s_window;
 static surface s_surface;
+
+// s_command_buffers has one recorded command buffer
+// for each image in the surface swapchain
 static std::vector<VkCommandBuffer> s_command_buffers;
+
 static std::array<VkClearValue, 3> s_clear_values;
+
 static shader s_vshader, s_fshader;
 static VkPipelineLayout s_layout;
-static std::vector<VkPipeline> s_pipelines;
+static VkPipeline s_pipeline;
 static bool s_resize{false};
 static bool s_rebuild{false};
 
+// s_update_push_constants_{command_buffers, fences} have one command buffer
+// or fence for each image in the surface swapchain to update push constants
 static std::vector<VkCommandBuffer> s_update_push_constants_command_buffers;
 static std::vector<VkFence> s_update_push_constants_fences;
 
+// These are the shader uniforms.
+// Currently the uniforms update at different rates:
+//   - iMouse only on input
+//   - iTime, iTimeDelta, iFrameRate, iFrame each frame
+//   - iResolution only on resize
+// So they should probably be broken out into different sets.
 struct push_constant_uniform_block {
   glm::vec4 iMouse{0.f, 0.f, 0.f, 0.f};
   float iTime{0.f};
@@ -35,38 +50,43 @@ struct push_constant_uniform_block {
   glm::vec3 iResolution{0.f, 0.f, 0.f};
 } s_shader_push_constants;
 
-static void create_pipeline(std::error_code& ec) noexcept {
+// Create a full pipeline with a full-screen quad vertex shader
+static std::tuple<shader, shader, VkPipelineLayout, VkPipeline>
+create_pipeline(std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
-  s_vshader = s_renderer.create_shader(PROJECT_DIR "/assets/shaders/fsq.vert",
-                                       shader::types::vertex, ec);
+  shader vshader = s_renderer.create_shader(
+    PROJECT_DIR "/assets/shaders/fsq.vert", shader::types::vertex, ec);
   if (ec) {
     LOG_FATAL(
       "creating shader " PROJECT_DIR "/assets/shaders/fsq.vert failed: %s%s%s",
-      ec.message().c_str(), (s_vshader.error_message().empty() ? "" : "\n"),
-      s_vshader.error_message().c_str());
-    return;
+      ec.message().c_str(), (vshader.error_message().empty() ? "" : "\n"),
+      vshader.error_message().c_str());
+    return {};
   }
 
-  s_fshader = s_renderer.create_shader(
+  shader fshader = s_renderer.create_shader(
     PROJECT_DIR "/assets/shaders/shadertoy.frag", shader::types::fragment, ec);
   if (ec) {
     LOG_FATAL("creating shader " PROJECT_DIR
               "/assets/shaders/shadertoy.frag failed: %s%s%s",
-              ec.message().c_str(), (s_fshader.error().empty() ? "" : "\n"),
-              s_fshader.error_message().c_str());
-    return false;
+              ec.message().c_str(), (fshader.error_message().empty() ? "" : "\n"),
+              fshader.error_message().c_str());
+    s_renderer.destroy(fshader);
+    return {};
   }
 
   std::array<VkPipelineShaderStageCreateInfo, 2> stages{{
     {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-     VK_SHADER_STAGE_VERTEX_BIT, s_vshader, "main", nullptr},
+     VK_SHADER_STAGE_VERTEX_BIT, vshader, "main", nullptr},
     {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-     VK_SHADER_STAGE_FRAGMENT_BIT, s_fshader, "main", nullptr},
+     VK_SHADER_STAGE_FRAGMENT_BIT, fshader, "main", nullptr},
   }};
 
 
+  // There are no binding or attribute descriptions for the vertex input as
+  // the fsq.vert vertex shader just uses gl_VertexIndex to create a triangle
   VkPipelineVertexInputStateCreateInfo vertex_input = {};
   vertex_input.sType =
     VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -76,6 +96,7 @@ static void create_pipeline(std::error_code& ec) noexcept {
     VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
   input_assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
+  // The viewport and scissor are specified later as dynamic states
   VkPipelineViewportStateCreateInfo viewport = {};
   viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
   viewport.viewportCount = 1;
@@ -83,6 +104,7 @@ static void create_pipeline(std::error_code& ec) noexcept {
   viewport.scissorCount = 1;
   viewport.pScissors = nullptr;
 
+  // fsq.vert outputs the vertices in clock-wise order
   VkPipelineRasterizationStateCreateInfo rasterization = {};
   rasterization.sType =
     VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
@@ -125,9 +147,13 @@ static void create_pipeline(std::error_code& ec) noexcept {
   push_constant_range.offset = 0;
   push_constant_range.size = sizeof(s_shader_push_constants);
 
-  s_layout = s_renderer.create_pipeline_layout(
-    {}, gsl::make_span(&push_constant_range, 1), ec);
-  if (ec) return;
+  VkPipelineLayout layout =
+    s_renderer.create_pipeline_layout({}, push_constant_range, ec);
+  if (ec) {
+    s_renderer.destroy(fshader);
+    s_renderer.destroy(vshader);
+    return {};
+  };
 
   VkGraphicsPipelineCreateInfo cinfo = {};
   cinfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -141,16 +167,24 @@ static void create_pipeline(std::error_code& ec) noexcept {
   cinfo.pDepthStencilState = &depth_stencil;
   cinfo.pColorBlendState = &color_blend;
   cinfo.pDynamicState = &dynamic;
-  cinfo.layout = s_layout;
+  cinfo.layout = layout;
   cinfo.renderPass = s_surface.render_pass();
   cinfo.subpass = 0;
 
-  s_pipelines = s_renderer.create_pipelines(gsl::make_span(&cinfo, 1), ec);
-  if (ec) return;
+  std::vector<VkPipeline> pipelines = s_renderer.create_pipelines(cinfo, ec);
+  if (ec) {
+    s_renderer.destroy(layout);
+    s_renderer.destroy(fshader);
+    s_renderer.destroy(vshader);
+    return {};
+  };
 
   LOG_LEAVE;
+  return std::make_tuple(std::move(vshader), std::move(fshader), layout,
+                         pipelines[0]);
 } // create_pipeline
 
+// Log a Vulkan debug report callback message
 static VkBool32 debug_report(VkDebugReportFlagsEXT flags,
                              VkDebugReportObjectTypeEXT, uint64_t, size_t,
                              int32_t, char const* layer_prefix,
@@ -216,14 +250,19 @@ static void init(std::error_code& ec) noexcept {
 
   s_clear_values[0] = {0.2f, 0.f, 0.3f, 0.f};
   s_clear_values[2] = {1.f, 0};
-  create_pipeline(ec);
+
+  std::tie(s_vshader, s_fshader, s_layout, s_pipeline) = create_pipeline(ec);
   if (ec) return;
 
   LOG_LEAVE;
 } // init
 
+// Record a command buffer to update the shader push constants
+// Use one comman buffer/fence for each surface swapchain image
 static void update_push_constants(uint32_t index,
                                   std::error_code& ec) noexcept {
+  // Wait on the fence for this swapchain image, after the wait returns
+  // the associated command buffer is free to be recorded into
   s_renderer.wait(s_update_push_constants_fences[index], true, UINT64_MAX, ec);
   if (ec) return;
   s_renderer.reset(s_update_push_constants_fences[index], ec);
@@ -270,6 +309,7 @@ static void draw() {
     s_command_buffers[image_index],
   }};
 
+  // Both submit the command buffers and then present the swapchain image
   s_renderer.submit_present(submit_command_buffers, s_surface, image_index,
                             s_update_push_constants_fences[image_index], ec);
   if (ec) {
@@ -284,13 +324,16 @@ static void draw() {
   }
 } // draw
 
-static void record_command_buffers() {
+// Pre-record the command buffers to bind the pipeline and draw the vertices
+static void record_command_buffers(gsl::span<VkCommandBuffer> command_buffers,
+                                   VkPipeline pipeline) noexcept {
   LOG_ENTER;
 
   static VkCommandBufferBeginInfo cbinfo = {};
   cbinfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   cbinfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
 
+  // Use the renderpass from the surface
   static VkRenderPassBeginInfo rbinfo = {};
   rbinfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
   rbinfo.renderPass = s_surface.render_pass();
@@ -300,23 +343,23 @@ static void record_command_buffers() {
   rbinfo.clearValueCount = gsl::narrow_cast<uint32_t>(s_clear_values.size());
   rbinfo.pClearValues = s_clear_values.data();
 
-  for (std::size_t i = 0; i < s_command_buffers.size(); ++i) {
+  for (std::size_t i = 0; i < command_buffers.size(); ++i) {
     rbinfo.framebuffer = s_surface.framebuffer(i);
 
-    vkBeginCommandBuffer(s_command_buffers[i], &cbinfo);
+    vkBeginCommandBuffer(command_buffers[i], &cbinfo);
 
-    vkCmdSetViewport(s_command_buffers[i], 0, 1, &s_surface.viewport());
-    vkCmdSetScissor(s_command_buffers[i], 0, 1, &s_surface.scissor());
+    vkCmdSetViewport(command_buffers[i], 0, 1, &s_surface.viewport());
+    vkCmdSetScissor(command_buffers[i], 0, 1, &s_surface.scissor());
 
-    vkCmdBeginRenderPass(s_command_buffers[i], &rbinfo,
+    vkCmdBeginRenderPass(command_buffers[i], &rbinfo,
                          VK_SUBPASS_CONTENTS_INLINE);
 
-    vkCmdBindPipeline(s_command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
-                      s_pipelines[0]);
-    vkCmdDraw(s_command_buffers[i], 3, 1, 0, 0);
+    vkCmdBindPipeline(command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipeline);
+    vkCmdDraw(command_buffers[i], 3, 1, 0, 0);
 
-    vkCmdEndRenderPass(s_command_buffers[i]);
-    vkEndCommandBuffer(s_command_buffers[i]);
+    vkCmdEndRenderPass(command_buffers[i]);
+    vkEndCommandBuffer(command_buffers[i]);
   }
 
   LOG_LEAVE;
@@ -340,24 +383,33 @@ static void resize() {
     s_shader_push_constants.iResolution.x /
     s_shader_push_constants.iResolution.y;
 
-  record_command_buffers();
+  // The surface swapchain has changed, so re-record the command buffers
+  record_command_buffers(s_command_buffers, s_pipeline);
   s_resize = false;
 
   LOG_LEAVE;
 } // resize
 
+// The shaders have changed, so rebuild the command buffers and pipeline
 static void rebuild() {
   LOG_ENTER;
   std::error_code ec;
 
-  s_renderer.free(s_command_buffers);
-  s_renderer.destroy(s_pipelines);
-  s_renderer.destroy(s_layout);
-  s_renderer.destroy(s_fshader);
-  s_renderer.destroy(s_vshader);
+  shader new_vshader, new_fshader;
+  VkPipelineLayout new_layout;
+  VkPipeline new_pipeline;
 
-  s_command_buffers = s_renderer.allocate_command_buffers(
-    gsl::narrow_cast<uint32_t>(s_surface.num_images()), ec);
+  std::tie(new_vshader, new_fshader, new_layout, new_pipeline) =
+    create_pipeline(ec);
+  if (ec) {
+    LOG_FATAL("rebuild: creating pipeline failed: %s", ec.message().c_str());
+    s_window.close();
+    return;
+  }
+
+  std::vector<VkCommandBuffer> new_command_buffers =
+    s_renderer.allocate_command_buffers(
+      gsl::narrow_cast<uint32_t>(s_surface.num_images()), ec);
   if (ec) {
     LOG_FATAL("rebuild: allocating command buffers failed: %s",
               ec.message().c_str());
@@ -365,14 +417,20 @@ static void rebuild() {
     return;
   }
 
-  create_pipeline(ec);
-  if (ec) {
-    LOG_FATAL("rebuild: creating pipeline failed: %s", ec.message().c_str());
-    s_window.close();
-    return;
-  }
+  record_command_buffers(new_command_buffers, new_pipeline);
 
-  record_command_buffers();
+  s_renderer.free(s_command_buffers);
+  s_renderer.destroy(s_pipeline);
+  s_renderer.destroy(s_layout);
+  s_renderer.destroy(s_fshader);
+  s_renderer.destroy(s_vshader);
+
+  s_command_buffers = std::move(new_command_buffers);
+  s_pipeline = new_pipeline;
+  s_layout = new_layout;
+  s_fshader = std::move(new_fshader);
+  s_vshader = std::move(new_vshader);
+
   s_rebuild = false;
   LOG_LEAVE;
 }
@@ -464,7 +522,7 @@ int main(int, char*[]) {
   for (auto&& fence : s_update_push_constants_fences) s_renderer.destroy(fence);
 
   s_renderer.free(s_command_buffers);
-  s_renderer.destroy(s_pipelines);
+  s_renderer.destroy(s_pipeline);
   s_renderer.destroy(s_layout);
   s_renderer.destroy(s_fshader);
   s_renderer.destroy(s_vshader);

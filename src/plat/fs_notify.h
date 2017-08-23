@@ -8,12 +8,13 @@
 namespace plat {
 namespace impl {
 
+// Watch filesystem paths for changes. Works with both files and directories.
 template <class D>
 class fs_notify {
 public:
   using watch_id = uint32_t;
 
-  enum class actions {
+  enum class actions : uint8_t {
     added,
     removed,
     modified

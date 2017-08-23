@@ -7,7 +7,7 @@
 
 namespace plat {
 
-//! \brief A RAII wrapper around the C stdio file handle
+// A RAII wrapper around the C stdio file handle
 class file_handle {
 public:
   enum class open_modes : uint8_t {

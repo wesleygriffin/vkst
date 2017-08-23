@@ -170,7 +170,7 @@ public:
   create_pipelines(gsl::span<VkGraphicsPipelineCreateInfo> cinfos,
                    std::error_code& ec) noexcept;
 
-  void destroy(std::vector<VkPipeline>& pipes) noexcept;
+  void destroy(gsl::span<VkPipeline> pipes) noexcept;
 
   VkFence create_fence(bool signaled, std::error_code& ec) noexcept;
   void wait(gsl::span<VkFence> fences, bool wait_all, uint64_t timeout,

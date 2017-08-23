@@ -8,7 +8,11 @@
 
 namespace plat {
 
-enum class log_severities {
+// Initialize logging with output to a given path.
+// Must be called before logging output will occur.
+void init_logging(plat::filesystem::path logfile, std::error_code& ec) noexcept;
+
+enum class log_severities : uint8_t {
   trace = 1,
   debug,
   info,
@@ -29,8 +33,6 @@ inline constexpr gsl::czstring to_string(log_severities severity) noexcept {
   case log_severities::none: return "NONE";
   }
 }
-
-void init_logging(plat::filesystem::path logfile, std::error_code& ec) noexcept;
 
 void log(log_severities severity, gsl::czstring fmt, ...) noexcept;
 

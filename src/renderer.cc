@@ -1411,7 +1411,7 @@ VkPipelineLayout renderer::create_pipeline_layout(
     gsl::narrow_cast<uint32_t>(push_constant_ranges.size());
   cinfo.pPushConstantRanges = push_constant_ranges.data();
 
-  VkPipelineLayout layout = {};
+  VkPipelineLayout layout;
   VkResult rslt = vkCreatePipelineLayout(_device, &cinfo, nullptr, &layout);
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
@@ -1447,12 +1447,9 @@ renderer::create_pipelines(gsl::span<VkGraphicsPipelineCreateInfo> cinfos,
   return pipelines;
 } // renderer::create_pipelines
 
-void renderer::destroy(std::vector<VkPipeline>& pipes) noexcept {
+void renderer::destroy(gsl::span<VkPipeline> pipes) noexcept {
   LOG_ENTER;
-
   for (auto&& pipe : pipes) vkDestroyPipeline(_device, pipe, nullptr);
-  pipes.clear();
-
   LOG_LEAVE;
 } // renderer::destroy
 
