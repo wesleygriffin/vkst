@@ -17,7 +17,7 @@ static wsi::window s_window;
 static surface s_surface;
 static std::vector<VkCommandBuffer> s_command_buffers;
 static std::array<VkClearValue, 3> s_clear_values;
-static VkShaderModule s_vshader, s_fshader;
+static shader s_vshader, s_fshader;
 static VkPipelineLayout s_layout;
 static std::vector<VkPipeline> s_pipelines;
 static bool s_resize{false};
@@ -40,13 +40,24 @@ static void create_pipeline(std::error_code& ec) noexcept {
   ec.clear();
 
   s_vshader = s_renderer.create_shader(PROJECT_DIR "/assets/shaders/fsq.vert",
-                                       renderer::shader_types::vertex, ec);
-  if (ec) return;
+                                       shader::types::vertex, ec);
+  if (ec) {
+    LOG_FATAL(
+      "creating shader " PROJECT_DIR "/assets/shaders/fsq.vert failed: %s%s%s",
+      ec.message().c_str(), (s_vshader.error_message().empty() ? "" : "\n"),
+      s_vshader.error_message().c_str());
+    return;
+  }
 
-  s_fshader =
-    s_renderer.create_shader(PROJECT_DIR "/assets/shaders/shadertoy.frag",
-                             renderer::shader_types::fragment, ec);
-  if (ec) return;
+  s_fshader = s_renderer.create_shader(
+    PROJECT_DIR "/assets/shaders/shadertoy.frag", shader::types::fragment, ec);
+  if (ec) {
+    LOG_FATAL("creating shader " PROJECT_DIR
+              "/assets/shaders/shadertoy.frag failed: %s%s%s",
+              ec.message().c_str(), (s_fshader.error().empty() ? "" : "\n"),
+              s_fshader.error_message().c_str());
+    return false;
+  }
 
   std::array<VkPipelineShaderStageCreateInfo, 2> stages{{
     {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
@@ -140,11 +151,45 @@ static void create_pipeline(std::error_code& ec) noexcept {
   LOG_LEAVE;
 } // create_pipeline
 
+static VkBool32 debug_report(VkDebugReportFlagsEXT flags,
+                             VkDebugReportObjectTypeEXT, uint64_t, size_t,
+                             int32_t, char const* layer_prefix,
+                             char const* message, void*) noexcept {
+  if ((flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) ==
+      VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+    LOG_INFO("%s: %s", layer_prefix, message);
+  }
+
+  if ((flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) ==
+      VK_DEBUG_REPORT_WARNING_BIT_EXT) {
+    LOG_WARN("%s: %s", layer_prefix, message);
+  }
+
+  if ((flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) ==
+      VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
+    LOG_WARN("%s: %s", layer_prefix, message);
+  }
+
+  if ((flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) ==
+      VK_DEBUG_REPORT_ERROR_BIT_EXT) {
+    LOG_ERROR("%s: %s", layer_prefix, message);
+  }
+
+  if ((flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) ==
+      VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+    if (strcmp(layer_prefix, "loader") != 0) {
+      LOG_DEBUG("%s: %s", layer_prefix, message);
+    }
+  }
+
+  return VK_FALSE;
+}
+
 static void init(std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
-  s_renderer = renderer::create("st", ec);
+  s_renderer = renderer::create("st", &debug_report, ec);
   if (ec) return;
 
   s_window = wsi::window::create(
@@ -332,7 +377,11 @@ static void rebuild() {
   LOG_LEAVE;
 }
 
+#if TURF_TARGET_WIN32
 int CALLBACK WinMain(::HINSTANCE, ::HINSTANCE, ::LPSTR, int) {
+#else
+int main(int, char*[]) {
+#endif
   std::error_code ec;
 
   plat::init_logging("st.log", ec);

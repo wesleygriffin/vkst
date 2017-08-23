@@ -87,6 +87,17 @@ surface& surface::operator=(surface&& rhs) noexcept {
   return *this;
 } // surface::operator=
 
+shader::shader(shader&& other) noexcept : _module{other._module} {
+  other._module = VK_NULL_HANDLE;
+}
+
+shader& shader::operator=(shader&& rhs) noexcept {
+  if (this == &rhs) return *this;
+  _module = rhs._module;
+  rhs._module = VK_NULL_HANDLE;
+  return *this;
+}
+
 namespace std {
 
 template <>
@@ -109,40 +120,6 @@ std::error_category const& renderer_result_category() {
   static renderer_result_category_impl instance;
   return instance;
 } // renderer_result_category
-
-static VkBool32 debug_report(VkDebugReportFlagsEXT flags,
-                             VkDebugReportObjectTypeEXT, uint64_t, size_t,
-                             int32_t, char const* layer_prefix,
-                             char const* message, void*) noexcept {
-  if ((flags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) ==
-      VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
-    LOG_INFO("%s: %s", layer_prefix, message);
-  }
-
-  if ((flags & VK_DEBUG_REPORT_WARNING_BIT_EXT) ==
-      VK_DEBUG_REPORT_WARNING_BIT_EXT) {
-    LOG_WARN("%s: %s", layer_prefix, message);
-  }
-
-  if ((flags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) ==
-      VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
-    LOG_WARN("%s: %s", layer_prefix, message);
-  }
-
-  if ((flags & VK_DEBUG_REPORT_ERROR_BIT_EXT) ==
-      VK_DEBUG_REPORT_ERROR_BIT_EXT) {
-    LOG_ERROR("%s: %s", layer_prefix, message);
-  }
-
-  if ((flags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) ==
-      VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
-    if (strcmp(layer_prefix, "loader") != 0) {
-      LOG_DEBUG("%s: %s", layer_prefix, message);
-    }
-  }
-
-  return VK_FALSE;
-}
 
 static VkInstance create_instance(gsl::czstring application_name,
                                   std::error_code& ec) noexcept {
@@ -353,6 +330,7 @@ static VkDevice create_device(VkPhysicalDevice physical, uint32_t queue_family,
 } // create_device
 
 renderer renderer::create(gsl::czstring application_name,
+                          PFN_vkDebugReportCallbackEXT callback,
                           std::error_code& ec) noexcept {
   LOG_ENTER;
 
@@ -366,7 +344,7 @@ renderer renderer::create(gsl::czstring application_name,
   VkDebugReportCallbackCreateInfoEXT drccinfo = {};
   drccinfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
   drccinfo.flags = VK_DEBUG_REPORT_FLAG_BITS_MAX_ENUM_EXT;
-  drccinfo.pfnCallback = &debug_report;
+  drccinfo.pfnCallback = callback;
 
   VkResult rslt = vkCreateDebugReportCallbackEXT(r._instance, &drccinfo,
                                                  nullptr, &r._callback);
@@ -476,10 +454,12 @@ static VkSurfaceFormatKHR choose_surface_format(VkPhysicalDevice physical,
   for (auto&& format : formats) {
     if (format.format == desired.format &&
         format.colorSpace == desired.colorSpace) {
+      LOG_LEAVE;
       return desired;
     }
   }
 
+  LOG_LEAVE;
   return formats[0];
 } // choose_surface_format
 
@@ -507,9 +487,13 @@ static VkPresentModeKHR choose_present_mode(VkPhysicalDevice physical,
   }
 
   for (auto&& mode : modes) {
-    if (mode == desired) return desired;
+    if (mode == desired) {
+      LOG_LEAVE;
+      return desired;
+    }
   }
 
+  LOG_LEAVE;
   return VK_PRESENT_MODE_FIFO_KHR; // required by spec to be supported
 } // choose_present_mode
 
@@ -1341,9 +1325,9 @@ private:
   std::vector<shaderc_include_result*> _include_results{};
 }; // class shader_includer
 
-static std::vector<uint32_t>
-compile_shader(plat::filesystem::path const& path,
-               shaderc_shader_kind kind, std::error_code& ec) noexcept {
+static std::pair<std::vector<uint32_t>, std::string>
+compile_shader(plat::filesystem::path const& path, shaderc_shader_kind kind,
+               std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
@@ -1358,58 +1342,56 @@ compile_shader(plat::filesystem::path const& path,
   auto spv = compiler.CompileGlslToSpv(source.data(), source.size(), kind,
                                        path.string().c_str(), "main", options);
   if (spv.GetCompilationStatus() != shaderc_compilation_status_success) {
-    if (spv.GetCompilationStatus() ==
-        shaderc_compilation_status_compilation_error) {
-      LOG_ERROR("Shader compilation failed:\n%s",
-                spv.GetErrorMessage().c_str());
-    }
     ec.assign(spv.GetCompilationStatus(), vk::shaderc_result_category());
-    return {};
+    return {{}, spv.GetErrorMessage()};
   }
 
   std::vector<uint32_t> code;
   std::copy(spv.begin(), spv.end(), std::back_inserter(code));
 
   LOG_LEAVE;
-  return code;
+  return {code, ""};
 } // compile_shader
 
-VkShaderModule renderer::create_shader(plat::filesystem::path const& path,
-                                       shader_types type,
-                                       std::error_code& ec) noexcept {
+shader renderer::create_shader(plat::filesystem::path const& path,
+                               shader::types type,
+                               std::error_code& ec) noexcept {
   LOG_ENTER;
+  ec.clear();
+
+  shader s;
 
   auto const kind = [&type]() {
     switch(type) {
-    case shader_types::vertex: return shaderc_vertex_shader;
-    case shader_types::fragment: return shaderc_fragment_shader;
+    case shader::types::vertex: return shaderc_vertex_shader;
+    case shader::types::fragment: return shaderc_fragment_shader;
     default: PLAT_MARK_UNREACHABLE;
     }
   }();
 
-  auto code = compile_shader(path, kind, ec);
-  if (ec) return VK_NULL_HANDLE;
+  std::vector<uint32_t> code;
+  std::tie(code, s._error_message) = compile_shader(path, kind, ec);
+  if (ec) return s;
 
   VkShaderModuleCreateInfo cinfo = {};
   cinfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   cinfo.codeSize = gsl::narrow_cast<uint32_t>(code.size() * 4);
   cinfo.pCode = code.data();
 
-  VkShaderModule shader_module;
-  VkResult rslt =
-    vkCreateShaderModule(_device, &cinfo, nullptr, &shader_module);
+  VkResult rslt = vkCreateShaderModule(_device, &cinfo, nullptr, &s._module);
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
-    return VK_NULL_HANDLE;
+    return s;
   }
 
   LOG_LEAVE;
-  return shader_module;
+  return s;
 } // renderer::create_shader
 
-void renderer::destroy(VkShaderModule shader) noexcept {
+void renderer::destroy(shader& s) noexcept {
   LOG_ENTER;
-  vkDestroyShaderModule(_device, shader, nullptr);
+  vkDestroyShaderModule(_device, s._module, nullptr);
+  s._module = VK_NULL_HANDLE;
   LOG_LEAVE;
 } // renderer::destroy
 

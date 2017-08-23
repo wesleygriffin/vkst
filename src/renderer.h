@@ -74,6 +74,31 @@ private:
   friend class renderer;
 }; // class surface
 
+class shader {
+public:
+  enum class types : uint8_t {
+    vertex = 0,
+    fragment = 1,
+  }; // enum class types
+
+  operator VkShaderModule() const noexcept { return _module; }
+
+  std::string const& error_message() const noexcept { return _error_message; }
+
+  shader() noexcept {}
+  shader(shader const&) = delete;
+  shader(shader&& other) noexcept;
+  shader& operator=(shader const&) = delete;
+  shader& operator=(shader&& rhs) noexcept;
+  ~shader() noexcept = default;
+
+private:
+  VkShaderModule _module{VK_NULL_HANDLE};
+  std::string _error_message{};
+
+  friend class renderer;
+}; // class shader
+
 enum class renderer_result {
   success = 0,
   no_device = 1,
@@ -100,6 +125,7 @@ inline std::error_code make_error_code(renderer_result e) noexcept {
 class renderer {
 public:
   static renderer create(gsl::czstring application_name,
+                         PFN_vkDebugReportCallbackEXT callback,
                          std::error_code& ec) noexcept;
 
   surface create_surface(wsi::window const& window,
@@ -128,15 +154,10 @@ public:
 
   void free(std::vector<VkCommandBuffer>& command_buffers) noexcept;
 
-  enum class shader_types {
-    vertex = 0,
-    fragment = 1,
-  }; // enum class enum shader_types
+  shader create_shader(plat::filesystem::path const& path, shader::types type,
+                       std::error_code& ec) noexcept;
 
-  VkShaderModule create_shader(plat::filesystem::path const& path,
-                               shader_types type, std::error_code& ec) noexcept;
-
-  void destroy(VkShaderModule shader) noexcept;
+  void destroy(shader& s) noexcept;
 
   VkPipelineLayout create_pipeline_layout(
     gsl::span<VkDescriptorSetLayout> descriptor_set_layouts,
