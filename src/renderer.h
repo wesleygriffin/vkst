@@ -175,7 +175,7 @@ public:
   allocate_command_buffers(uint32_t count, std::error_code& ec) noexcept;
 
   // Submit a set of command buffers. If ec is true, then an error occurred.
-  void submit(std::vector<VkCommandBuffer>& command_buffers, bool onetime,
+  void submit(gsl::span<VkCommandBuffer> command_buffers, bool onetime,
               std::error_code& ec) noexcept;
 
   void free(std::vector<VkCommandBuffer>& command_buffers) noexcept;
@@ -239,7 +239,7 @@ private:
   VkPhysicalDevice _physical{VK_NULL_HANDLE};
   VkDevice _device{VK_NULL_HANDLE};
 
-  uint32_t _graphics_queue_index{UINT32_MAX};
+  uint32_t _graphics_queue_family_index{UINT32_MAX};
   VkQueue _graphics_queue{VK_NULL_HANDLE};
   VkCommandPool _graphics_command_pool{VK_NULL_HANDLE};
   VkFence _graphics_onetime_fence{VK_NULL_HANDLE};

@@ -168,6 +168,30 @@ static VkInstance create_instance(gsl::czstring application_name,
   return instance;
 } // create_instance
 
+static VkDebugReportCallbackEXT
+create_debug_report_callback(VkInstance instance,
+                             PFN_vkDebugReportCallbackEXT callback,
+                             std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  VkDebugReportCallbackCreateInfoEXT drccinfo = {};
+  drccinfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
+  drccinfo.flags = VK_DEBUG_REPORT_FLAG_BITS_MAX_ENUM_EXT;
+  drccinfo.pfnCallback = callback;
+
+  VkDebugReportCallbackEXT debug_report_callback;
+  VkResult rslt = vkCreateDebugReportCallbackEXT(instance, &drccinfo, nullptr,
+                                                 &debug_report_callback);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return VK_NULL_HANDLE;
+  }
+
+  LOG_LEAVE;
+  return debug_report_callback;
+} // create_debug_report_callback
+
 static std::pair<VkPhysicalDevice, uint32_t>
 find_physical(VkInstance instance, std::error_code& ec) noexcept {
   LOG_ENTER;
@@ -196,21 +220,21 @@ find_physical(VkInstance instance, std::error_code& ec) noexcept {
     vkGetPhysicalDeviceQueueFamilyProperties2KHR(device, &count,
                                                  families.data());
 
-    for (uint32_t i = 0; i < count; ++i) {
-      auto&& properties = families[i].queueFamilyProperties;
+    for (uint32_t j = 0; j < count; ++j) {
+      auto&& properties = families[j].queueFamilyProperties;
       auto&& flags = properties.queueFlags;
 
       if (properties.queueCount == 0) continue;
       if ((flags & VK_QUEUE_GRAPHICS_BIT) != VK_QUEUE_GRAPHICS_BIT) continue;
 
 #if TURF_TARGET_WIN32
-      if (!vkGetPhysicalDeviceWin32PresentationSupportKHR(device, i)) continue;
+      if (!vkGetPhysicalDeviceWin32PresentationSupportKHR(device, j)) continue;
 #elif TURF_KERNEL_LINUX
-      if (!vkGetPhysicalDeviceXlibPresentationSupportKHR(device, i)) continue;
+      if (!vkGetPhysicalDeviceXlibPresentationSupportKHR(device, j)) continue;
 #endif
 
       LOG_LEAVE;
-      return {device, i};
+      return {device, j};
     }
   }
 
@@ -219,8 +243,9 @@ find_physical(VkInstance instance, std::error_code& ec) noexcept {
   return {VK_NULL_HANDLE, UINT32_MAX};
 } // find_physical
 
-static VkDevice create_device(VkPhysicalDevice physical, uint32_t queue_family,
-                              std::error_code& ec) noexcept {
+static std::pair<VkDevice, VkQueue>
+create_device(VkPhysicalDevice physical, uint32_t queue_family,
+              std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
@@ -241,7 +266,7 @@ static VkDevice create_device(VkPhysicalDevice physical, uint32_t queue_family,
     if (!vk::device_extension_present(physical, extension)) {
       ec.assign(static_cast<int>(vk::result::error_extension_not_present),
                 vk::result_category());
-      return VK_NULL_HANDLE;
+      return {};
     }
   }
 
@@ -318,75 +343,103 @@ static VkDevice create_device(VkPhysicalDevice physical, uint32_t queue_family,
   VkResult rslt = vkCreateDevice(physical, &cinfo, nullptr, &device);
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
-    return VK_NULL_HANDLE;
+    return {};
   }
 
   vk::load_device_procs(device);
+
+  VkQueue queue;
+  vkGetDeviceQueue(device, queue_family, 0, &queue);
+
   LOG_LEAVE;
-  return device;
+  return std::make_pair(device, queue);
+} // create_device
+
+static VkCommandPool create_command_pool(VkDevice device, uint32_t queue_family,
+                                         std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  VkCommandPoolCreateInfo cpcinfo = {};
+  cpcinfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  cpcinfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  cpcinfo.queueFamilyIndex = queue_family;
+
+  VkCommandPool command_pool;
+  VkResult rslt = vkCreateCommandPool(device, &cpcinfo, nullptr, &command_pool);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return VK_NULL_HANDLE;
+  }
+
+  LOG_LEAVE;
+  return command_pool;
+} // create_command_pool
+
+static VkFence create_fence(VkDevice device, std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  VkFenceCreateInfo fcinfo = {};
+  fcinfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+  VkFence fence;
+  VkResult rslt = vkCreateFence(device, &fcinfo, nullptr, &fence);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return VK_NULL_HANDLE;
+  }
+
+  LOG_LEAVE;
+  return fence;
 } // create_device
 
 renderer renderer::create(gsl::czstring application_name,
                           PFN_vkDebugReportCallbackEXT callback,
                           std::error_code& ec) noexcept {
   LOG_ENTER;
+  ec.clear();
+
+  //
+  // This function has been subdivided into smaller functions for readability.
+  // Those functions are all defined above and commented on there.
+  //
 
   renderer r;
+
+  // Start by initializing the loader. This loads the Vulkan shared library
+  // and initializes the needed non-instance-based function pointers.
   ec = vk::init_loader();
   if (ec) return r;
 
-  r._instance = create_instance(application_name, ec);
+  r._instance = ::create_instance(application_name, ec);
   if (ec) return r;
 
-  VkDebugReportCallbackCreateInfoEXT drccinfo = {};
-  drccinfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
-  drccinfo.flags = VK_DEBUG_REPORT_FLAG_BITS_MAX_ENUM_EXT;
-  drccinfo.pfnCallback = callback;
-
-  VkResult rslt = vkCreateDebugReportCallbackEXT(r._instance, &drccinfo,
-                                                 nullptr, &r._callback);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return r;
-  }
-
-  std::tie(r._physical, r._graphics_queue_index) =
-    find_physical(r._instance, ec);
+  r._callback = ::create_debug_report_callback(r._instance, callback, ec);
   if (ec) return r;
 
-  r._device = create_device(r._physical, r._graphics_queue_index, ec);
+  std::tie(r._physical, r._graphics_queue_family_index) =
+    ::find_physical(r._instance, ec);
   if (ec) return r;
 
-  vkGetDeviceQueue(r._device, r._graphics_queue_index, 0, &r._graphics_queue);
+  std::tie(r._device, r._graphics_queue) =
+    ::create_device(r._physical, r._graphics_queue_family_index, ec);
+  if (ec) return r;
 
-  VkCommandPoolCreateInfo cpcinfo = {};
-  cpcinfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  cpcinfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  cpcinfo.queueFamilyIndex = r._graphics_queue_index;
+  r._graphics_command_pool =
+    ::create_command_pool(r._device, r._graphics_queue_family_index, ec);
+  if (ec) return r;
 
-  rslt = vkCreateCommandPool(r._device, &cpcinfo, nullptr,
-                             &r._graphics_command_pool);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return r;
-  }
-
-  VkFenceCreateInfo fcinfo = {};
-  fcinfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-
-  rslt = vkCreateFence(r._device, &fcinfo, nullptr, &r._graphics_onetime_fence);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return r;
-  }
+  r._graphics_onetime_fence = ::create_fence(r._device, ec);
+  if (ec) return r;
 
   LOG_LEAVE;
   return r;
 } // renderer::create
 
-static VkSurfaceKHR create_surface_khr(VkInstance instance,
-                                       wsi::window const& window,
-                                       std::error_code& ec) noexcept {
+static VkSurfaceKHR create_surface(VkInstance instance,
+                                   wsi::window const& window,
+                                   std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
@@ -420,7 +473,25 @@ static VkSurfaceKHR create_surface_khr(VkInstance instance,
 
   LOG_LEAVE;
   return surface;
-} // create_surface_khr
+} // create_surface
+
+static bool check_surface_support(VkPhysicalDevice physical,
+                                  uint32_t queue_family, VkSurfaceKHR surface,
+                                  std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  VkBool32 supports;
+  VkResult rslt = vkGetPhysicalDeviceSurfaceSupportKHR(physical, queue_family,
+                                                       surface, &supports);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return false;
+  };
+
+  LOG_LEAVE;
+  return (supports == VK_TRUE);
+} // check_surface_support
 
 static VkSurfaceFormatKHR choose_surface_format(VkPhysicalDevice physical,
                                                 VkSurfaceKHR surface,
@@ -494,6 +565,25 @@ static VkPresentModeKHR choose_present_mode(VkPhysicalDevice physical,
   return VK_PRESENT_MODE_FIFO_KHR; // required by spec to be supported
 } // choose_present_mode
 
+static VkSemaphore create_semaphore(VkDevice device,
+                                    std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  VkSemaphoreCreateInfo cinfo = {};
+  cinfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+  VkSemaphore semaphore;
+  VkResult rslt = vkCreateSemaphore(device, &cinfo, nullptr, &semaphore);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return VK_NULL_HANDLE;
+  }
+
+  LOG_LEAVE;
+  return semaphore;
+} // create_semaphore
+
 static VkRenderPass create_render_pass(VkFormat color_format,
                                        VkFormat depth_format, VkDevice device,
                                        std::error_code& ec) noexcept {
@@ -566,53 +656,49 @@ surface renderer::create_surface(wsi::window const& window,
   LOG_ENTER;
   ec.clear();
 
+  //
+  // This function has been subdivided into smaller functions for readability.
+  // Those functions are all defined above and commented on there.
+  //
+
   surface s;
-  s._surface = create_surface_khr(_instance, window, ec);
+  s._surface = ::create_surface(_instance, window, ec);
   if (ec) return s;
 
-  VkBool32 supports;
-  VkResult rslt = vkGetPhysicalDeviceSurfaceSupportKHR(
-    _physical, _graphics_queue_index, s._surface, &supports);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return s;
-  } else if (supports == VK_FALSE) {
+  bool supports = ::check_surface_support(
+    _physical, _graphics_queue_family_index, s._surface, ec);
+  if (ec) return s;
+  if (!supports) {
     ec.assign(static_cast<int>(renderer_result::surface_not_supported),
               renderer_result_category());
     return s;
   }
 
+  // The desired surface format passed in to choose_surface_format
   s._color_format = {VK_FORMAT_B8G8R8A8_UNORM,
                      VK_COLORSPACE_SRGB_NONLINEAR_KHR};
   s._color_format =
-    choose_surface_format(_physical, s._surface, s._color_format, ec);
+    ::choose_surface_format(_physical, s._surface, s._color_format, ec);
   if (ec) return s;
 
+  // Hard-coded for convenience
   s._depth_format = VK_FORMAT_D32_SFLOAT;
   s._samples = VK_SAMPLE_COUNT_8_BIT;
 
+  // The desired present mode passed in to choose_present_mode
   s._present_mode = VK_PRESENT_MODE_FIFO_KHR;
   s._present_mode =
-    choose_present_mode(_physical, s._surface, s._present_mode, ec);
+    ::choose_present_mode(_physical, s._surface, s._present_mode, ec);
   if (ec) return s;
 
-  VkSemaphoreCreateInfo cinfo = {};
-  cinfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  s._image_available = ::create_semaphore(_device, ec);
+  if (ec) return s;
 
-  rslt = vkCreateSemaphore(_device, &cinfo, nullptr, &s._image_available);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return s;
-  }
-
-  rslt = vkCreateSemaphore(_device, &cinfo, nullptr, &s._render_finished);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return s;
-  }
+  s._render_finished = ::create_semaphore(_device, ec);
+  if (ec) return s;
 
   s._render_pass =
-    create_render_pass(s._color_format.format, s._depth_format, _device, ec);
+    ::create_render_pass(s._color_format.format, s._depth_format, _device, ec);
   if (ec) return s;
 
   resize(s, window.size(), ec);
@@ -621,6 +707,24 @@ surface renderer::create_surface(wsi::window const& window,
   LOG_LEAVE;
   return s;
 } // renderer::create_surface
+
+static VkSurfaceCapabilitiesKHR
+get_surface_capabilities(VkPhysicalDevice physical, VkSurfaceKHR surface,
+                         std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  VkSurfaceCapabilitiesKHR capabilities;
+  VkResult rslt =
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, surface, &capabilities);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return capabilities;
+  }
+
+  LOG_LEAVE;
+  return capabilities;
+} // get_surface_capabilities
 
 static VkSwapchainKHR
 create_swapchain(VkDevice device, VkSurfaceKHR surface,
@@ -661,6 +765,67 @@ create_swapchain(VkDevice device, VkSurfaceKHR surface,
   return swapchain;
 } // create_swapchain
 
+static VkImageView create_image_view(VkDevice device, VkImage image,
+                                     VkImageViewType type, VkFormat format,
+                                     VkImageSubresourceRange isr,
+                                     std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  VkImageViewCreateInfo cinfo = {};
+  cinfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  cinfo.image = image;
+  cinfo.viewType = type;
+  cinfo.format = format;
+  cinfo.components = {
+    VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+    VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+  cinfo.subresourceRange = isr;
+
+  VkImageView view;
+  VkResult rslt = vkCreateImageView(device, &cinfo, nullptr, &view);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return VK_NULL_HANDLE;
+  }
+
+  LOG_LEAVE;
+  return view;
+} // create_image_view
+
+std::pair<std::vector<VkImage>, std::vector<VkImageView>>
+get_swapchain_images(VkDevice device, VkSwapchainKHR swapchain, VkFormat format,
+                     std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  uint32_t count;
+  VkResult rslt = vkGetSwapchainImagesKHR(device, swapchain, &count, nullptr);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return {};
+  }
+
+  std::vector<VkImage> images(count);
+  rslt = vkGetSwapchainImagesKHR(device, swapchain, &count, images.data());
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return {};
+  }
+
+  std::vector<VkImageView> views;
+  views.reserve(count);
+  for (auto&& image : images) {
+    views.push_back(
+      ::create_image_view(device, image, VK_IMAGE_VIEW_TYPE_2D, format,
+                          {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}, ec));
+    if (ec) return {};
+  }
+
+  LOG_LEAVE;
+  return std::make_pair(images, views);
+} // get_swapchain_images
+
 static VkImage create_image(VkDevice device, VkImageType type, VkFormat format,
                             VkExtent3D extent, VkImageUsageFlags usage,
                             uint32_t mip_levels, uint32_t array_layers,
@@ -695,34 +860,6 @@ static VkImage create_image(VkDevice device, VkImageType type, VkFormat format,
   LOG_LEAVE;
   return image;
 } // create_image
-
-static VkImageView create_image_view(VkDevice device, VkImage image,
-                                     VkImageViewType type, VkFormat format,
-                                     VkImageSubresourceRange isr,
-                                     std::error_code& ec) noexcept {
-  LOG_ENTER;
-  ec.clear();
-
-  VkImageViewCreateInfo cinfo = {};
-  cinfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-  cinfo.image = image;
-  cinfo.viewType = type;
-  cinfo.format = format;
-  cinfo.components = {
-    VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-    VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-  cinfo.subresourceRange = isr;
-
-  VkImageView view;
-  VkResult rslt = vkCreateImageView(device, &cinfo, nullptr, &view);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return VK_NULL_HANDLE;
-  }
-
-  LOG_LEAVE;
-  return view;
-} // create_image_view
 
 static int32_t
 find_memory_type(VkPhysicalDeviceMemoryProperties memory_properties,
@@ -794,18 +931,113 @@ inline VkDeviceMemory allocate_memory(VkPhysicalDevice physical,
   return allocate_memory(physical, device, requirements, flags, ec);
 } // allocate_memory
 
+static std::tuple<VkImage, VkDeviceMemory, VkImageView> create_image_and_view(
+  VkPhysicalDevice physical, VkDevice device, VkImageType type, VkFormat format,
+  VkExtent3D extent, VkImageUsageFlags usage, uint32_t mip_levels,
+  uint32_t array_layers, VkImageLayout initial, VkSampleCountFlagBits samples,
+  VkImageCreateFlags flags, VkImageViewType view_type,
+  VkImageSubresourceRange isr, std::error_code& ec) noexcept {
+  VkImage image = create_image(device, type, format, extent, usage, mip_levels,
+                               array_layers, initial, samples, flags, ec);
+  if (ec) return {};
+
+  VkDeviceMemory memory = allocate_memory(
+    physical, device, image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, ec);
+  if (ec) return {};
+
+  VkResult rslt = vkBindImageMemory(device, image, memory, 0);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return {};
+  }
+
+  VkImageView view =
+    create_image_view(device, image, view_type, format, isr, ec);
+  if (ec) return {};
+
+  LOG_LEAVE;
+  return std::make_tuple(image, memory, view);
+} // create_image_and_view
+
+static void transition_depth_image(renderer* r, VkImage image,
+                                   std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  VkCommandBuffer command_buffer = r->allocate_command_buffers(1, ec)[0];
+  if (ec) return;
+
+  VkCommandBufferBeginInfo binfo = {};
+  binfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  binfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+
+  vkBeginCommandBuffer(command_buffer, &binfo);
+
+  VkImageMemoryBarrier barrier = {};
+  barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+  barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.image = image;
+  barrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                       nullptr, 1, &barrier);
+
+  vkEndCommandBuffer(command_buffer);
+
+  r->submit(command_buffer, true, ec);
+} // transition_depth_image
+
+static std::vector<VkFramebuffer>
+create_framebuffers(VkDevice device, gsl::span<VkImageView> attachments,
+                    gsl::span<VkImageView> image_views,
+                    VkRenderPass render_pass, VkExtent2D extent,
+                    std::error_code& ec) noexcept {
+  LOG_ENTER;
+  ec.clear();
+
+  std::vector<VkFramebuffer> framebuffers;
+  framebuffers.reserve(image_views.size());
+
+  VkFramebufferCreateInfo cinfo = {};
+  cinfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+  cinfo.renderPass = render_pass;
+  cinfo.attachmentCount = 4;
+  cinfo.width = extent.width;
+  cinfo.height = extent.height;
+  cinfo.layers = 1;
+
+  for (auto&& view : image_views) {
+    attachments[1] = view;
+    cinfo.pAttachments = attachments.data();
+
+    VkFramebuffer framebuffer;
+    VkResult rslt = vkCreateFramebuffer(device, &cinfo, nullptr, &framebuffer);
+    if (rslt != VK_SUCCESS) {
+      ec.assign(rslt, vk::result_category());
+      return {};
+    }
+
+    framebuffers.push_back(framebuffer);
+  }
+
+  LOG_LEAVE;
+  return framebuffers;
+} // create_framebuffers
+
 void renderer::resize(surface& s, wsi::extent2d const& extent,
                       std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
-  VkSurfaceCapabilitiesKHR new_capabilities;
-  VkResult rslt = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-    _physical, s._surface, &new_capabilities);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    return;
-  }
+  VkSurfaceCapabilitiesKHR new_capabilities =
+    ::get_surface_capabilities(_physical, s._surface, ec);
+  if (ec) return;
 
   VkExtent2D new_extent = {
     new_capabilities.currentExtent.width == UINT32_MAX
@@ -832,7 +1064,6 @@ void renderer::resize(surface& s, wsi::extent2d const& extent,
 
   // predeclare to handle failure cleanup
   VkSwapchainKHR new_swapchain{VK_NULL_HANDLE};
-  uint32_t count;
   std::vector<VkImage> new_color_images;
   std::vector<VkImageView> new_color_image_views;
   VkImage new_depth_image{VK_NULL_HANDLE}, new_color_target{VK_NULL_HANDLE},
@@ -845,164 +1076,55 @@ void renderer::resize(surface& s, wsi::extent2d const& extent,
     new_depth_target_view{VK_NULL_HANDLE};
   std::array<VkImageView, 4> attachments;
   std::vector<VkFramebuffer> new_framebuffers;
-  VkFramebufferCreateInfo fbcinfo = {};
   std::vector<VkCommandBuffer> command_buffers;
-  VkCommandBufferBeginInfo binfo = {};
-  VkImageMemoryBarrier barrier = {};
 
   new_swapchain =
-    create_swapchain(_device, s._surface, new_capabilities, new_extent,
-                     s._color_format, s._present_mode, s._swapchain, ec);
+    ::create_swapchain(_device, s._surface, new_capabilities, new_extent,
+                       s._color_format, s._present_mode, s._swapchain, ec);
   if (ec) goto fail;
 
-  rslt = vkGetSwapchainImagesKHR(_device, new_swapchain, &count, nullptr);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    goto fail;
-  }
-
-  new_color_images.resize(count);
-  rslt = vkGetSwapchainImagesKHR(_device, new_swapchain, &count,
-                                 new_color_images.data());
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    goto fail;
-  }
-
-  new_color_image_views.reserve(count);
-  for (auto&& image : new_color_images) {
-    new_color_image_views.push_back(create_image_view(
-      _device, image, VK_IMAGE_VIEW_TYPE_2D, s._color_format.format,
-      {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}, ec));
-    if (ec) goto fail;
-  }
-
-  new_depth_image =
-    create_image(_device, VK_IMAGE_TYPE_2D, s._depth_format, image_extent,
-                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 1, 1,
-                 VK_IMAGE_LAYOUT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT, 0, ec);
+  std::tie(new_color_images, new_color_image_views) =
+    ::get_swapchain_images(_device, new_swapchain, s._color_format.format, ec);
   if (ec) goto fail;
 
-  new_depth_image_memory =
-    allocate_memory(_physical, _device, new_depth_image,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, ec);
+  std::tie(new_depth_image, new_depth_image_memory, new_depth_image_view) =
+    ::create_image_and_view(
+      _physical, _device, VK_IMAGE_TYPE_2D, s._depth_format, image_extent,
+      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 1, 1,
+      VK_IMAGE_LAYOUT_UNDEFINED, VK_SAMPLE_COUNT_1_BIT, 0,
+      VK_IMAGE_VIEW_TYPE_2D, {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}, ec);
   if (ec) goto fail;
 
-  rslt = vkBindImageMemory(_device, new_depth_image, new_depth_image_memory, 0);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    goto fail;
-  }
-
-  new_depth_image_view = create_image_view(
-    _device, new_depth_image, VK_IMAGE_VIEW_TYPE_2D, s._depth_format,
-    {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}, ec);
+  transition_depth_image(this, new_depth_image, ec);
   if (ec) goto fail;
 
-  new_color_target = create_image(
-    _device, VK_IMAGE_TYPE_2D, s._color_format.format, image_extent,
-    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-      VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
-    1, 1, VK_IMAGE_LAYOUT_UNDEFINED, s._samples, 0, ec);
+  std::tie(new_color_target, new_color_target_memory, new_color_target_view) =
+    ::create_image_and_view(_physical, _device, VK_IMAGE_TYPE_2D,
+                            s._color_format.format, image_extent,
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                              VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                            1, 1, VK_IMAGE_LAYOUT_UNDEFINED, s._samples, 0,
+                            VK_IMAGE_VIEW_TYPE_2D,
+                            {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}, ec);
   if (ec) goto fail;
 
-  new_color_target_memory =
-    allocate_memory(_physical, _device, new_color_target,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, ec);
-  if (ec) goto fail;
-
-  rslt =
-    vkBindImageMemory(_device, new_color_target, new_color_target_memory, 0);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    goto fail;
-  }
-
-  new_color_target_view = create_image_view(
-    _device, new_color_target, VK_IMAGE_VIEW_TYPE_2D, s._color_format.format,
-    {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}, ec);
-  if (ec) goto fail;
-
-  new_depth_target =
-    create_image(_device, VK_IMAGE_TYPE_2D, s._depth_format, image_extent,
-                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
-                 1, 1, VK_IMAGE_LAYOUT_UNDEFINED, s._samples, 0, ec);
-  if (ec) goto fail;
-
-  new_depth_target_memory =
-    allocate_memory(_physical, _device, new_depth_target,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, ec);
-  if (ec) goto fail;
-
-  rslt =
-    vkBindImageMemory(_device, new_depth_target, new_depth_target_memory, 0);
-  if (rslt != VK_SUCCESS) {
-    ec.assign(rslt, vk::result_category());
-    goto fail;
-  }
-
-  new_depth_target_view = create_image_view(
-    _device, new_depth_target, VK_IMAGE_VIEW_TYPE_2D, s._depth_format,
-    {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}, ec);
+  std::tie(new_depth_target, new_depth_target_memory, new_depth_target_view) =
+    ::create_image_and_view(
+      _physical, _device, VK_IMAGE_TYPE_2D, s._depth_format, image_extent,
+      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+      1, 1, VK_IMAGE_LAYOUT_UNDEFINED, s._samples, 0, VK_IMAGE_VIEW_TYPE_2D,
+      {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}, ec);
   if (ec) goto fail;
 
   attachments[0] = new_color_target_view;
   attachments[2] = new_depth_target_view;
   attachments[3] = new_depth_image_view;
 
-  new_framebuffers.reserve(count);
-
-  fbcinfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-  fbcinfo.renderPass = s._render_pass;
-  fbcinfo.attachmentCount = 4;
-  fbcinfo.width = new_extent.width;
-  fbcinfo.height = new_extent.height;
-  fbcinfo.layers = 1;
-
-  for (auto&& view : new_color_image_views) {
-    attachments[1] = view;
-    fbcinfo.pAttachments = attachments.data();
-
-    VkFramebuffer framebuffer;
-    rslt = vkCreateFramebuffer(_device, &fbcinfo, nullptr, &framebuffer);
-    if (rslt != VK_SUCCESS) {
-      ec.assign(rslt, vk::result_category());
-      goto fail;
-    }
-
-    new_framebuffers.push_back(framebuffer);
-  }
-
-  command_buffers = allocate_command_buffers(1, ec);
+  new_framebuffers =
+    create_framebuffers(_device, attachments, new_color_image_views,
+                        s._render_pass, new_extent, ec);
   if (ec) goto fail;
-
-  binfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  binfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
-
-  vkBeginCommandBuffer(command_buffers[0], &binfo);
-
-  barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-  barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-  barrier.image = new_depth_image;
-  barrier.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-
-  vkCmdPipelineBarrier(command_buffers[0], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0,
-                       nullptr, 1, &barrier);
-
-  vkEndCommandBuffer(command_buffers[0]);
-
-  submit(command_buffers, true, ec);
-  if (ec) {
-    free(command_buffers);
-    goto fail;
-  }
 
   if (s._swapchain != VK_NULL_HANDLE) release(s);
 
@@ -1055,9 +1177,7 @@ fail:
   }
 
   for (auto&& view : new_color_image_views) {
-    if (view != VK_NULL_HANDLE) {
-      vkDestroyImageView(_device, view, nullptr);
-    }
+    if (view != VK_NULL_HANDLE) { vkDestroyImageView(_device, view, nullptr); }
   }
 
   if (new_swapchain != VK_NULL_HANDLE) {
@@ -1220,8 +1340,8 @@ renderer::allocate_command_buffers(uint32_t count,
   return command_buffers;
 } // renderer::allocate_command_buffers
 
-void renderer::submit(std::vector<VkCommandBuffer>& command_buffers,
-                      bool onetime, std::error_code& ec) noexcept {
+void renderer::submit(gsl::span<VkCommandBuffer> command_buffers, bool onetime,
+                      std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
@@ -1359,7 +1479,7 @@ shader renderer::create_shader(plat::filesystem::path const& path,
   shader s;
 
   auto const kind = [&type]() {
-    switch(type) {
+    switch (type) {
     case shader::types::vertex: return shaderc_vertex_shader;
     case shader::types::fragment: return shaderc_fragment_shader;
     default: PLAT_MARK_UNREACHABLE;
@@ -1496,7 +1616,7 @@ renderer::renderer(renderer&& other) noexcept
 , _callback{other._callback}
 , _physical{other._physical}
 , _device{other._device}
-, _graphics_queue_index{other._graphics_queue_index}
+, _graphics_queue_family_index{other._graphics_queue_family_index}
 , _graphics_queue{other._graphics_queue}
 , _graphics_command_pool{other._graphics_command_pool}
 , _graphics_onetime_fence{other._graphics_onetime_fence} {
@@ -1514,7 +1634,7 @@ renderer& renderer::operator=(renderer&& rhs) noexcept {
   _callback = rhs._callback;
   _physical = rhs._physical;
   _device = rhs._device;
-  _graphics_queue_index = rhs._graphics_queue_index;
+  _graphics_queue_family_index = rhs._graphics_queue_family_index;
   _graphics_queue = rhs._graphics_queue;
   _graphics_command_pool = rhs._graphics_command_pool;
   _graphics_onetime_fence = rhs._graphics_onetime_fence;
@@ -1546,4 +1666,3 @@ renderer::~renderer() noexcept {
 
   LOG_LEAVE;
 } // renderer::~renderer
-
