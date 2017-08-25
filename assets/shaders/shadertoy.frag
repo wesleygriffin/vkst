@@ -20,4 +20,6 @@ layout(location = 0) out vec4 fragColor;
 
 void main() {
     mainImage(fragColor, fragCoord);
+    //vec2 uv = fragCoord.xy;// / iResolution.xy;
+    //fragColor = vec4(uv, 0., 1.);
 }

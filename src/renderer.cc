@@ -1362,6 +1362,10 @@ void renderer::submit(gsl::span<VkCommandBuffer> command_buffers, bool onetime,
 
 void renderer::free(std::vector<VkCommandBuffer>& command_buffers) noexcept {
   LOG_ENTER;
+  if (command_buffers.empty()) {
+    LOG_LEAVE;
+    return;
+  }
 
   vkDeviceWaitIdle(_device);
   vkFreeCommandBuffers(_device, _graphics_command_pool,
@@ -1496,7 +1500,9 @@ shader renderer::create_shader(plat::filesystem::path const& path,
 
 void renderer::destroy(shader& s) noexcept {
   LOG_ENTER;
-  vkDestroyShaderModule(_device, s._module, nullptr);
+  if (s._module != VK_NULL_HANDLE) {
+    vkDestroyShaderModule(_device, s._module, nullptr);
+  }
   s._module = VK_NULL_HANDLE;
   LOG_LEAVE;
 } // renderer::destroy
@@ -1530,7 +1536,9 @@ VkPipelineLayout renderer::create_pipeline_layout(
 
 void renderer::destroy(VkPipelineLayout layout) noexcept {
   LOG_ENTER;
-  vkDestroyPipelineLayout(_device, layout, nullptr);
+  if (layout != VK_NULL_HANDLE) {
+    vkDestroyPipelineLayout(_device, layout, nullptr);
+  }
   LOG_LEAVE;
 } // renderer::destroy
 
@@ -1596,7 +1604,7 @@ void renderer::reset(gsl::span<VkFence> fences, std::error_code& ec) noexcept {
 
 void renderer::destroy(VkFence fence) noexcept {
   LOG_ENTER;
-  vkDestroyFence(_device, fence, nullptr);
+  if (fence != VK_NULL_HANDLE) vkDestroyFence(_device, fence, nullptr);
   LOG_LEAVE;
 } // renderer::destroy
 

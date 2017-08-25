@@ -44,9 +44,11 @@ void log(log_severities severity, gsl::czstring fmt, ...) noexcept;
 #define LOG_FATAL(...) ::plat::log(::plat::log_severities::fatal, __VA_ARGS__)
 
 #define LOG_ENTER                                                              \
-  ::plat::log(::plat::log_severities::trace, "enter: %s", __func__)
+  ::plat::log(::plat::log_severities::trace, "enter: %s (%s:%d)", __func__,    \
+              __FILE__, __LINE__)
 #define LOG_LEAVE                                                              \
-  ::plat::log(::plat::log_severities::trace, "leave: %s", __func__)
+  ::plat::log(::plat::log_severities::trace, "leave: %s (%s:%d)", __func__,    \
+              __FILE__, __LINE__)
 
 } // namespace plat
 

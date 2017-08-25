@@ -56,25 +56,31 @@ create_pipeline(std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
-  shader vshader = s_renderer.create_shader(
+  shader vshader{};
+  shader fshader{};
+  VkPipelineLayout layout{VK_NULL_HANDLE};
+  std::vector<VkPipeline> pipelines{};
+
+  vshader = s_renderer.create_shader(
     PROJECT_DIR "/assets/shaders/fsq.vert", shader::types::vertex, ec);
   if (ec) {
     LOG_FATAL(
       "creating shader " PROJECT_DIR "/assets/shaders/fsq.vert failed: %s%s%s",
       ec.message().c_str(), (vshader.error_message().empty() ? "" : "\n"),
       vshader.error_message().c_str());
-    return {};
+    return std::make_tuple(std::move(vshader), std::move(fshader), layout,
+                           VkPipeline{VK_NULL_HANDLE});
   }
 
-  shader fshader = s_renderer.create_shader(
+  fshader = s_renderer.create_shader(
     PROJECT_DIR "/assets/shaders/shadertoy.frag", shader::types::fragment, ec);
   if (ec) {
     LOG_FATAL("creating shader " PROJECT_DIR
               "/assets/shaders/shadertoy.frag failed: %s%s%s",
               ec.message().c_str(), (fshader.error_message().empty() ? "" : "\n"),
               fshader.error_message().c_str());
-    s_renderer.destroy(fshader);
-    return {};
+    return std::make_tuple(std::move(vshader), std::move(fshader), layout,
+                           VkPipeline{VK_NULL_HANDLE});
   }
 
   std::array<VkPipelineShaderStageCreateInfo, 2> stages{{
@@ -147,13 +153,11 @@ create_pipeline(std::error_code& ec) noexcept {
   push_constant_range.offset = 0;
   push_constant_range.size = sizeof(s_shader_push_constants);
 
-  VkPipelineLayout layout =
-    s_renderer.create_pipeline_layout({}, push_constant_range, ec);
+  layout = s_renderer.create_pipeline_layout({}, push_constant_range, ec);
   if (ec) {
-    s_renderer.destroy(fshader);
-    s_renderer.destroy(vshader);
-    return {};
-  };
+    return std::make_tuple(std::move(vshader), std::move(fshader), layout,
+                           VkPipeline{VK_NULL_HANDLE});
+  }
 
   VkGraphicsPipelineCreateInfo cinfo = {};
   cinfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -171,13 +175,11 @@ create_pipeline(std::error_code& ec) noexcept {
   cinfo.renderPass = s_surface.render_pass();
   cinfo.subpass = 0;
 
-  std::vector<VkPipeline> pipelines = s_renderer.create_pipelines(cinfo, ec);
+  pipelines = s_renderer.create_pipelines(cinfo, ec);
   if (ec) {
-    s_renderer.destroy(layout);
-    s_renderer.destroy(fshader);
-    s_renderer.destroy(vshader);
-    return {};
-  };
+    return std::make_tuple(std::move(vshader), std::move(fshader), layout,
+                           VkPipeline{VK_NULL_HANDLE});
+  }
 
   LOG_LEAVE;
   return std::make_tuple(std::move(vshader), std::move(fshader), layout,
@@ -398,25 +400,23 @@ static void rebuild() {
   std::error_code ec;
 
   shader new_vshader, new_fshader;
-  VkPipelineLayout new_layout;
-  VkPipeline new_pipeline;
+  VkPipelineLayout new_layout{VK_NULL_HANDLE};
+  VkPipeline new_pipeline{VK_NULL_HANDLE};
+  std::vector<VkCommandBuffer> new_command_buffers;
 
   std::tie(new_vshader, new_fshader, new_layout, new_pipeline) =
     create_pipeline(ec);
   if (ec) {
     LOG_FATAL("rebuild: creating pipeline failed: %s", ec.message().c_str());
-    s_window.close();
-    return;
+    goto fail;
   }
 
-  std::vector<VkCommandBuffer> new_command_buffers =
-    s_renderer.allocate_command_buffers(
-      gsl::narrow_cast<uint32_t>(s_surface.num_images()), ec);
+  new_command_buffers = s_renderer.allocate_command_buffers(
+    gsl::narrow_cast<uint32_t>(s_surface.num_images()), ec);
   if (ec) {
     LOG_FATAL("rebuild: allocating command buffers failed: %s",
               ec.message().c_str());
-    s_window.close();
-    return;
+    goto fail;
   }
 
   record_command_buffers(new_command_buffers, new_pipeline);
@@ -435,6 +435,14 @@ static void rebuild() {
 
   s_rebuild = false;
   LOG_LEAVE;
+  return;
+
+fail:
+  s_renderer.free(new_command_buffers);
+  s_renderer.destroy(new_pipeline);
+  s_renderer.destroy(new_layout);
+  s_renderer.destroy(new_fshader);
+  s_renderer.destroy(new_vshader);
 }
 
 #if TURF_TARGET_WIN32
