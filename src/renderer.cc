@@ -126,15 +126,18 @@ static VkInstance create_instance(gsl::czstring application_name,
   LOG_ENTER;
   ec.clear();
 
-  std::array<gsl::czstring, 4> layers{
-    {"VK_LAYER_GOOGLE_threading", "VK_LAYER_LUNARG_parameter_validation",
-     "VK_LAYER_LUNARG_object_tracker", "VK_LAYER_LUNARG_core_validation"}};
+  std::array<gsl::czstring, 1> layers{{"VK_LAYER_LUNARG_standard_validation"}};
+  // I don't like GOOGLE_unique_objects, as it obscures the true vulkan handles
+  // But it is included in VK_LAYER_LUNARG_standard_validation. My preference is:
 
-  std::array<gsl::czstring, 5> extensions{{
+  //std::array<gsl::czstring, 4> layers{
+  //  {"VK_LAYER_LUNARG_core_validation", "VK_LAYER_LUNARG_object_tracker",
+  //   "VK_LAYER_LUNARG_parameter_validation", "VK_LAYER_GOOGLE_threading"}};
+
+
+  std::array<gsl::czstring, 3> extensions{{
     VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
-    VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
     VK_KHR_SURFACE_EXTENSION_NAME,
-    VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
 #if TURF_TARGET_WIN32
     VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
 #else
@@ -145,7 +148,7 @@ static VkInstance create_instance(gsl::czstring application_name,
   VkApplicationInfo ainfo = {};
   ainfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   ainfo.pApplicationName = application_name;
-  ainfo.apiVersion = VK_MAKE_VERSION(1, 0, 54);
+  ainfo.apiVersion = VK_MAKE_VERSION(1, 0, 0);
 
   VkInstanceCreateInfo cinfo = {};
   cinfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -209,23 +212,16 @@ find_physical(VkInstance instance, std::error_code& ec) noexcept {
   for (uint32_t i = 0; i < num_devices; ++i) {
     auto&& device = devices[i];
     uint32_t count;
-    vkGetPhysicalDeviceQueueFamilyProperties2KHR(device, &count, nullptr);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
 
-    std::vector<VkQueueFamilyProperties2KHR> families(count);
-    for (auto&& properties : families) {
-      properties.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2_KHR;
-      properties.pNext = nullptr;
-    }
-
-    vkGetPhysicalDeviceQueueFamilyProperties2KHR(device, &count,
-                                                 families.data());
+    std::vector<VkQueueFamilyProperties> families(count);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
 
     for (uint32_t j = 0; j < count; ++j) {
-      auto&& properties = families[j].queueFamilyProperties;
-      auto&& flags = properties.queueFlags;
-
-      if (properties.queueCount == 0) continue;
-      if ((flags & VK_QUEUE_GRAPHICS_BIT) != VK_QUEUE_GRAPHICS_BIT) continue;
+      if (families[j].queueCount == 0) continue;
+      if ((families[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) !=
+          VK_QUEUE_GRAPHICS_BIT)
+        continue;
 
 #if TURF_TARGET_WIN32
       if (!vkGetPhysicalDeviceWin32PresentationSupportKHR(device, j)) continue;
@@ -256,11 +252,7 @@ create_device(VkPhysicalDevice physical, uint32_t queue_family,
   qcinfo.queueCount = 1;
   qcinfo.pQueuePriorities = &priority;
 
-  std::array<gsl::czstring, 4> extensions{
-    {VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
-     VK_KHR_MAINTENANCE1_EXTENSION_NAME,
-     VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME,
-     VK_KHR_SWAPCHAIN_EXTENSION_NAME}};
+  std::array<gsl::czstring, 1> extensions{{VK_KHR_SWAPCHAIN_EXTENSION_NAME}};
 
   for (auto&& extension : extensions) {
     if (!vk::device_extension_present(physical, extension)) {
@@ -270,74 +262,73 @@ create_device(VkPhysicalDevice physical, uint32_t queue_family,
     }
   }
 
-  VkPhysicalDeviceFeatures2KHR features = {};
-  features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2_KHR;
+  VkPhysicalDeviceFeatures features;
 
   // clang-format off
-  features.features.robustBufferAccess = VK_FALSE;
-  features.features.fullDrawIndexUint32 = VK_TRUE;
-  features.features.imageCubeArray = VK_TRUE;
-  features.features.independentBlend = VK_FALSE; // VK_TRUE?
-  features.features.geometryShader = VK_TRUE;
-  features.features.tessellationShader = VK_TRUE;
-  features.features.sampleRateShading = VK_FALSE; // VK_TRUE?
-  features.features.dualSrcBlend = VK_FALSE; // VK_TRUE?
-  features.features.logicOp = VK_FALSE; // VK_TRUE?
-  features.features.multiDrawIndirect = VK_FALSE; // VK_TRUE?
-  features.features.drawIndirectFirstInstance = VK_FALSE; // VK_TRUE?
-  features.features.depthClamp = VK_TRUE;
-  features.features.depthBiasClamp = VK_TRUE;
-  features.features.fillModeNonSolid = VK_TRUE;
-  features.features.depthBounds = VK_FALSE; // VK_TRUE?
-  features.features.wideLines = VK_FALSE; // VK_TRUE?
-  features.features.largePoints = VK_FALSE; // VK_TRUE?
-  features.features.alphaToOne = VK_FALSE; // VK_TRUE?
-  features.features.multiViewport = VK_TRUE;
-  features.features.samplerAnisotropy = VK_TRUE;
-  features.features.textureCompressionETC2 = VK_FALSE;
-  features.features.textureCompressionASTC_LDR = VK_FALSE; // BOO!!
-  features.features.textureCompressionBC = VK_TRUE;
-  features.features.occlusionQueryPrecise = VK_FALSE; // VK_TRUE?
-  features.features.pipelineStatisticsQuery = VK_TRUE;
-  features.features.vertexPipelineStoresAndAtomics = VK_FALSE; // VK_TRUE?
-  features.features.fragmentStoresAndAtomics = VK_FALSE; // VK_TRUE?
-  features.features.shaderTessellationAndGeometryPointSize = VK_FALSE; // VK_TRUE?
-  features.features.shaderImageGatherExtended = VK_FALSE; // VK_TRUE?
-  features.features.shaderStorageImageExtendedFormats = VK_FALSE; // VK_TRUE?
-  features.features.shaderStorageImageMultisample = VK_FALSE; // VK_TRUE?
-  features.features.shaderStorageImageReadWithoutFormat = VK_FALSE; // VK_TRUE?
-  features.features.shaderStorageImageWriteWithoutFormat = VK_FALSE; // VK_TRUE?
-  features.features.shaderUniformBufferArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
-  features.features.shaderSampledImageArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
-  features.features.shaderStorageBufferArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
-  features.features.shaderStorageImageArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
-  features.features.shaderClipDistance = VK_TRUE;
-  features.features.shaderCullDistance = VK_TRUE;
-  features.features.shaderFloat64 = VK_FALSE;
-  features.features.shaderInt64 = VK_FALSE;
-  features.features.shaderInt16 = VK_FALSE;
-  features.features.shaderResourceResidency = VK_FALSE; // VK_TRUE?
-  features.features.shaderResourceMinLod = VK_TRUE;
-  features.features.sparseBinding = VK_FALSE; // VK_TRUE?
-  features.features.sparseResidencyBuffer = VK_FALSE; // VK_TRUE?
-  features.features.sparseResidencyImage2D = VK_FALSE; // VK_TRUE?
-  features.features.sparseResidencyImage3D = VK_FALSE; // VK_TRUE?
-  features.features.sparseResidency2Samples = VK_FALSE; // VK_TRUE?
-  features.features.sparseResidency4Samples = VK_FALSE; // VK_TRUE?
-  features.features.sparseResidency8Samples = VK_FALSE; // VK_TRUE?
-  features.features.sparseResidency16Samples = VK_FALSE; // VK_TRUE?
-  features.features.sparseResidencyAliased = VK_FALSE; // VK_TRUE?
-  features.features.variableMultisampleRate = VK_FALSE; // VK_TRUE?
-  features.features.inheritedQueries = VK_FALSE; // VK_TRUE?
+  features.robustBufferAccess = VK_FALSE;
+  features.fullDrawIndexUint32 = VK_TRUE;
+  features.imageCubeArray = VK_TRUE;
+  features.independentBlend = VK_FALSE; // VK_TRUE?
+  features.geometryShader = VK_TRUE;
+  features.tessellationShader = VK_TRUE;
+  features.sampleRateShading = VK_FALSE; // VK_TRUE?
+  features.dualSrcBlend = VK_FALSE; // VK_TRUE?
+  features.logicOp = VK_FALSE; // VK_TRUE?
+  features.multiDrawIndirect = VK_FALSE; // VK_TRUE?
+  features.drawIndirectFirstInstance = VK_FALSE; // VK_TRUE?
+  features.depthClamp = VK_TRUE;
+  features.depthBiasClamp = VK_TRUE;
+  features.fillModeNonSolid = VK_TRUE;
+  features.depthBounds = VK_FALSE; // VK_TRUE?
+  features.wideLines = VK_FALSE; // VK_TRUE?
+  features.largePoints = VK_FALSE; // VK_TRUE?
+  features.alphaToOne = VK_FALSE; // VK_TRUE?
+  features.multiViewport = VK_TRUE;
+  features.samplerAnisotropy = VK_TRUE;
+  features.textureCompressionETC2 = VK_FALSE;
+  features.textureCompressionASTC_LDR = VK_FALSE; // BOO!!
+  features.textureCompressionBC = VK_TRUE;
+  features.occlusionQueryPrecise = VK_FALSE; // VK_TRUE?
+  features.pipelineStatisticsQuery = VK_TRUE;
+  features.vertexPipelineStoresAndAtomics = VK_FALSE; // VK_TRUE?
+  features.fragmentStoresAndAtomics = VK_FALSE; // VK_TRUE?
+  features.shaderTessellationAndGeometryPointSize = VK_FALSE; // VK_TRUE?
+  features.shaderImageGatherExtended = VK_FALSE; // VK_TRUE?
+  features.shaderStorageImageExtendedFormats = VK_FALSE; // VK_TRUE?
+  features.shaderStorageImageMultisample = VK_FALSE; // VK_TRUE?
+  features.shaderStorageImageReadWithoutFormat = VK_FALSE; // VK_TRUE?
+  features.shaderStorageImageWriteWithoutFormat = VK_FALSE; // VK_TRUE?
+  features.shaderUniformBufferArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
+  features.shaderSampledImageArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
+  features.shaderStorageBufferArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
+  features.shaderStorageImageArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
+  features.shaderClipDistance = VK_TRUE;
+  features.shaderCullDistance = VK_TRUE;
+  features.shaderFloat64 = VK_FALSE;
+  features.shaderInt64 = VK_FALSE;
+  features.shaderInt16 = VK_FALSE;
+  features.shaderResourceResidency = VK_FALSE; // VK_TRUE?
+  features.shaderResourceMinLod = VK_TRUE;
+  features.sparseBinding = VK_FALSE; // VK_TRUE?
+  features.sparseResidencyBuffer = VK_FALSE; // VK_TRUE?
+  features.sparseResidencyImage2D = VK_FALSE; // VK_TRUE?
+  features.sparseResidencyImage3D = VK_FALSE; // VK_TRUE?
+  features.sparseResidency2Samples = VK_FALSE; // VK_TRUE?
+  features.sparseResidency4Samples = VK_FALSE; // VK_TRUE?
+  features.sparseResidency8Samples = VK_FALSE; // VK_TRUE?
+  features.sparseResidency16Samples = VK_FALSE; // VK_TRUE?
+  features.sparseResidencyAliased = VK_FALSE; // VK_TRUE?
+  features.variableMultisampleRate = VK_FALSE; // VK_TRUE?
+  features.inheritedQueries = VK_FALSE; // VK_TRUE?
   // clang-format on
 
   VkDeviceCreateInfo cinfo = {};
   cinfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-  cinfo.pNext = &features;
   cinfo.queueCreateInfoCount = 1;
   cinfo.pQueueCreateInfos = &qcinfo;
   cinfo.enabledExtensionCount = gsl::narrow_cast<uint32_t>(extensions.size());
   cinfo.ppEnabledExtensionNames = extensions.data();
+  cinfo.pEnabledFeatures = &features;
 
   VkDevice device;
   VkResult rslt = vkCreateDevice(physical, &cinfo, nullptr, &device);
@@ -884,12 +875,10 @@ static VkDeviceMemory allocate_memory(VkPhysicalDevice physical,
   LOG_ENTER;
   ec.clear();
 
-  VkPhysicalDeviceMemoryProperties2KHR memory_properties = {};
-  memory_properties.sType =
-    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2_KHR;
-  vkGetPhysicalDeviceMemoryProperties2KHR(physical, &memory_properties);
+  VkPhysicalDeviceMemoryProperties memory_properties;
+  vkGetPhysicalDeviceMemoryProperties(physical, &memory_properties);
 
-  int32_t type_index = find_memory_type(memory_properties.memoryProperties,
+  int32_t type_index = find_memory_type(memory_properties,
                                         requirements.memoryTypeBits, flags);
   if (type_index < 0) {
     ec.assign(static_cast<int>(renderer_result::no_memory_type),
