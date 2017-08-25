@@ -134,6 +134,7 @@ public:
   // creation and the renderer object is in an invalid state.
   static renderer create(gsl::czstring application_name,
                          PFN_vkDebugReportCallbackEXT callback,
+                         uint32_t push_constant_size,
                          std::error_code& ec) noexcept;
 
   // Create a new surface. If ec is true, then an error occurred during

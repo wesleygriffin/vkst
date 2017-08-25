@@ -266,7 +266,8 @@ static void init(std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
-  s_renderer = renderer::create("st", &debug_report, ec);
+  s_renderer =
+    renderer::create("st", &debug_report, sizeof(s_shader_push_constants), ec);
   if (ec) return;
 
   s_window = wsi::window::create(

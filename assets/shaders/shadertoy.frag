@@ -19,7 +19,8 @@ layout(location = 0) out vec4 fragColor;
 //#include "iq_raymarching_primitives.frag"
 
 void main() {
-    mainImage(fragColor, fragCoord);
-    //vec2 uv = fragCoord.xy;// / iResolution.xy;
+    //mainImage(fragColor, fragCoord);
+    //fragColor = vec4(0., 0., float(iTimeDelta) * .5, 1.);
+    fragColor = vec4(fragCoord.xy, 0., 1.);// / iResolution.xy;
     //fragColor = vec4(uv, 0., 1.);
 }

@@ -196,9 +196,15 @@ create_debug_report_callback(VkInstance instance,
 } // create_debug_report_callback
 
 static std::pair<VkPhysicalDevice, uint32_t>
-find_physical(VkInstance instance, std::error_code& ec) noexcept {
+find_physical(VkInstance instance, uint32_t push_constant_size,
+              std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
+
+  if (push_constant_size > 128) {
+    LOG_WARN("requested size of push constants (%d) is > 128",
+             push_constant_size);
+  }
 
   std::array<VkPhysicalDevice, 4> devices;
   uint32_t num_devices = gsl::narrow_cast<uint32_t>(devices.max_size());
@@ -209,12 +215,19 @@ find_physical(VkInstance instance, std::error_code& ec) noexcept {
     return {VK_NULL_HANDLE, UINT32_MAX};
   }
 
+  VkPhysicalDeviceProperties properties;
+  std::vector<VkQueueFamilyProperties> families;
+
   for (uint32_t i = 0; i < num_devices; ++i) {
     auto&& device = devices[i];
+    
+    vkGetPhysicalDeviceProperties(device, &properties);
+    if (properties.limits.maxPushConstantsSize < push_constant_size) continue;
+
     uint32_t count;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
 
-    std::vector<VkQueueFamilyProperties> families(count);
+    families.resize(count);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
 
     for (uint32_t j = 0; j < count; ++j) {
@@ -387,6 +400,7 @@ static VkFence create_fence(VkDevice device, std::error_code& ec) noexcept {
 
 renderer renderer::create(gsl::czstring application_name,
                           PFN_vkDebugReportCallbackEXT callback,
+                          uint32_t push_constant_size,
                           std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
@@ -410,7 +424,7 @@ renderer renderer::create(gsl::czstring application_name,
   if (ec) return r;
 
   std::tie(r._physical, r._graphics_queue_family_index) =
-    ::find_physical(r._instance, ec);
+    ::find_physical(r._instance, push_constant_size, ec);
   if (ec) return r;
 
   std::tie(r._device, r._graphics_queue) =

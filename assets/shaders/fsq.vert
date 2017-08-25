@@ -18,5 +18,5 @@ void main() {
     gl_Position = vec4(fragCoord * 2.0 - 1.0, 0.f, 1.0);
     fragCoord.y *= -1;
     fragCoord.y += 1;
-    fragCoord *= iResolution.xy;
+    //fragCoord *= iResolution.xy;
 }
