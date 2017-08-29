@@ -1,7 +1,7 @@
 if(MSVC)
     set(_common "/DWIN32 /D_WINDOWS /W4 /MP")
-    set(_common_debug "/MDd /ZI /Ob0 /Od /RTC1")
-    set(_common_release "/DNDEBUG /MD /Ob2 /Os")
+    set(_common_debug "/MT /ZI /Ob0 /Od /RTC1")
+    set(_common_release "/DNDEBUG /MT /Ob2 /Os")
     set(_common_libraries "kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib")
 
     set(CMAKE_C_FLAGS "${_common}" CACHE STRING "" FORCE)
