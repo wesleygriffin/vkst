@@ -13,7 +13,11 @@ PLAT_POP_WARNING
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
+#if TURF_TARGET_WIN32
+#include <shellapi.h>
+#endif
 
+static bool s_igpu{false}; // force integrated gpu
 static renderer s_renderer;
 static wsi::window s_window;
 static surface s_surface;
@@ -46,8 +50,9 @@ struct push_constant_uniform_block {
   float iTime{0.f};
   float iTimeDelta{0.f};
   float iFrameRate{0.f};
-  int iFrame{0};
+  float iFrame{0};
   glm::vec3 iResolution{0.f, 0.f, 0.f};
+  float padding0;
 } s_shader_push_constants;
 
 // Create a full pipeline with a full-screen quad vertex shader
@@ -266,8 +271,10 @@ static void init(std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
-  s_renderer =
-    renderer::create("st", &debug_report, sizeof(s_shader_push_constants), ec);
+  s_renderer = renderer::create(
+    "st",
+    (s_igpu ? renderer_options::use_integrated_gpu : renderer_options::none),
+    &debug_report, sizeof(s_shader_push_constants), ec);
   if (ec) return;
 
   s_window = wsi::window::create(
@@ -444,17 +451,44 @@ fail:
   s_renderer.destroy(new_layout);
   s_renderer.destroy(new_fshader);
   s_renderer.destroy(new_vshader);
-}
+} // rebuild
+
+#if TURF_TARGET_WIN32
+
+void parse_options(LPWSTR* szArgList, int nArgs) {
+  for (int i = 0; i < nArgs; ++i) {
+    if (wcscmp(szArgList[i], L"--igpu") == 0) s_igpu = true;
+  }
+} // parse_options
+
+#else
+
+void parse_options(int argc, char* argv[]) {
+  for (int i = 0; i < argc; ++i) {
+    if (strcmp(argv[i], "--igpu") == 0) s_igpu = true;
+  }
+} // parse_options
+
+#endif // TURF_TARGET_WIN32
 
 #if TURF_TARGET_WIN32
 int CALLBACK WinMain(::HINSTANCE, ::HINSTANCE, ::LPSTR, int) {
 #else
-int main(int, char*[]) {
+int main(int argc, char* argv[]) {
 #endif
   std::error_code ec;
 
   plat::init_logging("st.log", ec);
   if (ec) std::exit(EXIT_FAILURE);
+
+#if TURF_TARGET_WIN32
+  int nArgs;
+  LPWSTR* szArgList = ::CommandLineToArgvW(GetCommandLineW(), &nArgs);
+  parse_options(szArgList, nArgs);
+  LocalFree(szArgList);
+#else
+  parse_options(argc, argv);
+#endif
 
   init(ec);
   if (ec) {
@@ -521,7 +555,7 @@ int main(int, char*[]) {
 
     s_shader_push_constants.iTime = elapsed.count();
     s_shader_push_constants.iTimeDelta = delta.count();
-    s_shader_push_constants.iFrame = frame;
+    s_shader_push_constants.iFrame = static_cast<float>(frame);
     s_shader_push_constants.iFrameRate = frame / s_shader_push_constants.iTime;
 
     draw();

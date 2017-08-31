@@ -121,10 +121,16 @@ std::error_category const& renderer_result_category() {
   return instance;
 } // renderer_result_category
 
+// Create a Vulkan Instance.
+// https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#initialization-instances
 static VkInstance create_instance(gsl::czstring application_name,
                                   std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
+
+  // Layers can be null, but for this example, we want to use the validation
+  // layers. VK_LAYER_LUNARG_standard_validation is a "meta-layer" that
+  // includes several other layers.
 
   std::array<gsl::czstring, 1> layers{{"VK_LAYER_LUNARG_standard_validation"}};
   // I don't like GOOGLE_unique_objects, as it obscures the true vulkan handles
@@ -135,6 +141,9 @@ static VkInstance create_instance(gsl::czstring application_name,
   //   "VK_LAYER_LUNARG_parameter_validation", "VK_LAYER_GOOGLE_threading"}};
 
 
+  // Some extensions are required for graphics: VK_KHR_SURFACE and the
+  // appropriate platform-specific SURFACE_EXTENSION. We also include
+  // VK_EXT_DEBUG_REPORT for debug output messages.
   std::array<gsl::czstring, 3> extensions{{
     VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
     VK_KHR_SURFACE_EXTENSION_NAME,
@@ -145,10 +154,10 @@ static VkInstance create_instance(gsl::czstring application_name,
 #endif
   }};
 
-  VkApplicationInfo ainfo = {};
+  VkApplicationInfo ainfo = {}; // zero all fields
   ainfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   ainfo.pApplicationName = application_name;
-  ainfo.apiVersion = VK_MAKE_VERSION(1, 0, 0);
+  ainfo.apiVersion = VK_MAKE_VERSION(1, 0, 0); // patch number is ignored; use 0
 
   VkInstanceCreateInfo cinfo = {};
   cinfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -165,12 +174,16 @@ static VkInstance create_instance(gsl::czstring application_name,
     return VK_NULL_HANDLE;
   }
 
+  // load the instance-based function pointers
   vk::load_instance_procs(instance);
 
   LOG_LEAVE;
   return instance;
 } // create_instance
 
+// Create a debug report callback for logging debug messages
+// https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#debugging-debug-report-callbacks
+// https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#VK_EXT_debug_report
 static VkDebugReportCallbackEXT
 create_debug_report_callback(VkInstance instance,
                              PFN_vkDebugReportCallbackEXT callback,
@@ -178,7 +191,7 @@ create_debug_report_callback(VkInstance instance,
   LOG_ENTER;
   ec.clear();
 
-  VkDebugReportCallbackCreateInfoEXT drccinfo = {};
+  VkDebugReportCallbackCreateInfoEXT drccinfo = {}; // zero all fields
   drccinfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
   drccinfo.flags = VK_DEBUG_REPORT_FLAG_BITS_MAX_ENUM_EXT;
   drccinfo.pfnCallback = callback;
@@ -195,21 +208,34 @@ create_debug_report_callback(VkInstance instance,
   return debug_report_callback;
 } // create_debug_report_callback
 
+// Find a compatible Vulkan Physical Device.
+// Return both the physical device and the graphics-useable queue family index.
+// https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#devsandqueues-physical-device-enumeration
 static std::pair<VkPhysicalDevice, uint32_t>
-find_physical(VkInstance instance, uint32_t push_constant_size,
-              std::error_code& ec) noexcept {
+find_physical(VkInstance instance, renderer_options opts,
+              uint32_t push_constant_size, std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
+  // The spec specifies the max push constant size as 128 bytes.
+  // https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#features-limits
+  // Scroll to Section 32.2.1, Table 43
   if (push_constant_size > 128) {
     LOG_WARN("requested size of push constants (%d) is > 128",
              push_constant_size);
   }
 
-  std::array<VkPhysicalDevice, 4> devices;
-  uint32_t num_devices = gsl::narrow_cast<uint32_t>(devices.max_size());
-  VkResult rslt =
-    vkEnumeratePhysicalDevices(instance, &num_devices, devices.data());
+  // Query the number of physical devices available.
+  uint32_t num_devices;
+  VkResult rslt = vkEnumeratePhysicalDevices(instance, &num_devices, nullptr);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return {VK_NULL_HANDLE, UINT32_MAX};
+  }
+
+  // Get the list of physical devices.
+  std::vector<VkPhysicalDevice> devices(num_devices);
+  rslt = vkEnumeratePhysicalDevices(instance, &num_devices, devices.data());
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
     return {VK_NULL_HANDLE, UINT32_MAX};
@@ -218,30 +244,56 @@ find_physical(VkInstance instance, uint32_t push_constant_size,
   VkPhysicalDeviceProperties properties;
   std::vector<VkQueueFamilyProperties> families;
 
+  // For each device
   for (uint32_t i = 0; i < num_devices; ++i) {
     auto&& device = devices[i];
-    
+
+    // Query the physical device properties.
     vkGetPhysicalDeviceProperties(device, &properties);
+
+    // If the caller requested an integrated GPU, and this device isn't an
+    // iGPU, skip it.
+    if ((opts & renderer_options::use_integrated_gpu) ==
+          renderer_options::use_integrated_gpu &&
+        properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) {
+      continue;
+    }
+
+    // If this device doesn't have enough push constant memory, skip it.
     if (properties.limits.maxPushConstantsSize < push_constant_size) continue;
 
+    // If this device doesn't supports the swapchain extension, skip it.
+    if (!vk::device_extension_present(device, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+      ec.assign(static_cast<int>(vk::result::error_extension_not_present),
+                vk::result_category());
+      continue;
+    }
+
+    // Query the queue family properties of this device.
     uint32_t count;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
-
     families.resize(count);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
 
+    // For each queue family
     for (uint32_t j = 0; j < count; ++j) {
+      // If this family has no queues, skip it.
       if (families[j].queueCount == 0) continue;
+      // If this family does not have graphics capability, skip it.
       if ((families[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) !=
-          VK_QUEUE_GRAPHICS_BIT)
+          VK_QUEUE_GRAPHICS_BIT) {
         continue;
+      }
 
+      // If this device does not support presentation of surfaces, skip it.
+      // This is a general check, each created surface must also be checked.
 #if TURF_TARGET_WIN32
       if (!vkGetPhysicalDeviceWin32PresentationSupportKHR(device, j)) continue;
 #elif TURF_KERNEL_LINUX
       if (!vkGetPhysicalDeviceXlibPresentationSupportKHR(device, j)) continue;
 #endif
 
+      LOG_INFO("using device %s", properties.deviceName);
       LOG_LEAVE;
       return {device, j};
     }
@@ -252,21 +304,28 @@ find_physical(VkInstance instance, uint32_t push_constant_size,
   return {VK_NULL_HANDLE, UINT32_MAX};
 } // find_physical
 
+// Create a Vulkan Device.
+// Return both the device and queue.
+// https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#devsandqueues-devices
 static std::pair<VkDevice, VkQueue>
-create_device(VkPhysicalDevice physical, uint32_t queue_family,
+create_device(VkPhysicalDevice physical, uint32_t queue_family_index,
               std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
+  // We must specify the types of queues we will be using up front.
+  // For this example, we only need a single graphics queue.
   float const priority = 1.f;
   VkDeviceQueueCreateInfo qcinfo = {};
   qcinfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-  qcinfo.queueFamilyIndex = queue_family;
+  qcinfo.queueFamilyIndex = queue_family_index;
   qcinfo.queueCount = 1;
   qcinfo.pQueuePriorities = &priority;
 
+  // We must request the VK_KHR_SWAPCHAIN extension.
   std::array<gsl::czstring, 1> extensions{{VK_KHR_SWAPCHAIN_EXTENSION_NAME}};
 
+  // Verify the physical device supports all of the requested extensions.
   for (auto&& extension : extensions) {
     if (!vk::device_extension_present(physical, extension)) {
       ec.assign(static_cast<int>(vk::result::error_extension_not_present),
@@ -275,65 +334,10 @@ create_device(VkPhysicalDevice physical, uint32_t queue_family,
     }
   }
 
-  VkPhysicalDeviceFeatures features;
-
-  // clang-format off
-  features.robustBufferAccess = VK_FALSE;
+  VkPhysicalDeviceFeatures features = {}; // set all to VK_FALSE (0)
   features.fullDrawIndexUint32 = VK_TRUE;
-  features.imageCubeArray = VK_TRUE;
-  features.independentBlend = VK_FALSE; // VK_TRUE?
-  features.geometryShader = VK_TRUE;
-  features.tessellationShader = VK_TRUE;
-  features.sampleRateShading = VK_FALSE; // VK_TRUE?
-  features.dualSrcBlend = VK_FALSE; // VK_TRUE?
-  features.logicOp = VK_FALSE; // VK_TRUE?
-  features.multiDrawIndirect = VK_FALSE; // VK_TRUE?
-  features.drawIndirectFirstInstance = VK_FALSE; // VK_TRUE?
-  features.depthClamp = VK_TRUE;
-  features.depthBiasClamp = VK_TRUE;
   features.fillModeNonSolid = VK_TRUE;
-  features.depthBounds = VK_FALSE; // VK_TRUE?
-  features.wideLines = VK_FALSE; // VK_TRUE?
-  features.largePoints = VK_FALSE; // VK_TRUE?
-  features.alphaToOne = VK_FALSE; // VK_TRUE?
-  features.multiViewport = VK_TRUE;
-  features.samplerAnisotropy = VK_TRUE;
-  features.textureCompressionETC2 = VK_FALSE;
-  features.textureCompressionASTC_LDR = VK_FALSE; // BOO!!
-  features.textureCompressionBC = VK_TRUE;
-  features.occlusionQueryPrecise = VK_FALSE; // VK_TRUE?
   features.pipelineStatisticsQuery = VK_TRUE;
-  features.vertexPipelineStoresAndAtomics = VK_FALSE; // VK_TRUE?
-  features.fragmentStoresAndAtomics = VK_FALSE; // VK_TRUE?
-  features.shaderTessellationAndGeometryPointSize = VK_FALSE; // VK_TRUE?
-  features.shaderImageGatherExtended = VK_FALSE; // VK_TRUE?
-  features.shaderStorageImageExtendedFormats = VK_FALSE; // VK_TRUE?
-  features.shaderStorageImageMultisample = VK_FALSE; // VK_TRUE?
-  features.shaderStorageImageReadWithoutFormat = VK_FALSE; // VK_TRUE?
-  features.shaderStorageImageWriteWithoutFormat = VK_FALSE; // VK_TRUE?
-  features.shaderUniformBufferArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
-  features.shaderSampledImageArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
-  features.shaderStorageBufferArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
-  features.shaderStorageImageArrayDynamicIndexing = VK_FALSE; // VK_TRUE?
-  features.shaderClipDistance = VK_TRUE;
-  features.shaderCullDistance = VK_TRUE;
-  features.shaderFloat64 = VK_FALSE;
-  features.shaderInt64 = VK_FALSE;
-  features.shaderInt16 = VK_FALSE;
-  features.shaderResourceResidency = VK_FALSE; // VK_TRUE?
-  features.shaderResourceMinLod = VK_TRUE;
-  features.sparseBinding = VK_FALSE; // VK_TRUE?
-  features.sparseResidencyBuffer = VK_FALSE; // VK_TRUE?
-  features.sparseResidencyImage2D = VK_FALSE; // VK_TRUE?
-  features.sparseResidencyImage3D = VK_FALSE; // VK_TRUE?
-  features.sparseResidency2Samples = VK_FALSE; // VK_TRUE?
-  features.sparseResidency4Samples = VK_FALSE; // VK_TRUE?
-  features.sparseResidency8Samples = VK_FALSE; // VK_TRUE?
-  features.sparseResidency16Samples = VK_FALSE; // VK_TRUE?
-  features.sparseResidencyAliased = VK_FALSE; // VK_TRUE?
-  features.variableMultisampleRate = VK_FALSE; // VK_TRUE?
-  features.inheritedQueries = VK_FALSE; // VK_TRUE?
-  // clang-format on
 
   VkDeviceCreateInfo cinfo = {};
   cinfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -350,16 +354,21 @@ create_device(VkPhysicalDevice physical, uint32_t queue_family,
     return {};
   }
 
+  // load the device-based function pointers
   vk::load_device_procs(device);
 
+  // Get the created graphics queue.
   VkQueue queue;
-  vkGetDeviceQueue(device, queue_family, 0, &queue);
+  vkGetDeviceQueue(device, queue_family_index, 0, &queue);
 
   LOG_LEAVE;
   return std::make_pair(device, queue);
 } // create_device
 
-static VkCommandPool create_command_pool(VkDevice device, uint32_t queue_family,
+// Create a Vulkan Command Pool for a specific device and queue.
+// https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#commandbuffers-pools
+static VkCommandPool create_command_pool(VkDevice device,
+                                         uint32_t queue_family_index,
                                          std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
@@ -367,7 +376,7 @@ static VkCommandPool create_command_pool(VkDevice device, uint32_t queue_family,
   VkCommandPoolCreateInfo cpcinfo = {};
   cpcinfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
   cpcinfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  cpcinfo.queueFamilyIndex = queue_family;
+  cpcinfo.queueFamilyIndex = queue_family_index;
 
   VkCommandPool command_pool;
   VkResult rslt = vkCreateCommandPool(device, &cpcinfo, nullptr, &command_pool);
@@ -380,6 +389,8 @@ static VkCommandPool create_command_pool(VkDevice device, uint32_t queue_family,
   return command_pool;
 } // create_command_pool
 
+// Create a Vulkan Fence
+// https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#synchronization-fences
 static VkFence create_fence(VkDevice device, std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
@@ -398,7 +409,7 @@ static VkFence create_fence(VkDevice device, std::error_code& ec) noexcept {
   return fence;
 } // create_device
 
-renderer renderer::create(gsl::czstring application_name,
+renderer renderer::create(gsl::czstring application_name, renderer_options opts,
                           PFN_vkDebugReportCallbackEXT callback,
                           uint32_t push_constant_size,
                           std::error_code& ec) noexcept {
@@ -424,7 +435,7 @@ renderer renderer::create(gsl::czstring application_name,
   if (ec) return r;
 
   std::tie(r._physical, r._graphics_queue_family_index) =
-    ::find_physical(r._instance, push_constant_size, ec);
+    ::find_physical(r._instance, opts, push_constant_size, ec);
   if (ec) return r;
 
   std::tie(r._device, r._graphics_queue) =
@@ -481,14 +492,15 @@ static VkSurfaceKHR create_surface(VkInstance instance,
 } // create_surface
 
 static bool check_surface_support(VkPhysicalDevice physical,
-                                  uint32_t queue_family, VkSurfaceKHR surface,
+                                  uint32_t queue_family_index,
+                                  VkSurfaceKHR surface,
                                   std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
   VkBool32 supports;
-  VkResult rslt = vkGetPhysicalDeviceSurfaceSupportKHR(physical, queue_family,
-                                                       surface, &supports);
+  VkResult rslt = vkGetPhysicalDeviceSurfaceSupportKHR(
+    physical, queue_family_index, surface, &supports);
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
     return false;

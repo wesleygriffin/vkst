@@ -125,6 +125,11 @@ inline std::error_code make_error_code(renderer_result e) noexcept {
   return {static_cast<int>(e), renderer_result_category()};
 }
 
+enum class renderer_options : uint8_t {
+  none = 0,
+  use_integrated_gpu = (1 << 1),
+}; // renderer_options
+
 // Holds all of the data for rendering. Also provides methods for creating
 // surfaces, shaders, pipelines, and command buffers, as well as submitting
 // command buffers for execution on the device.
@@ -132,7 +137,7 @@ class renderer {
 public:
   // Create a new renderer. If ec is true, then an error occurred during
   // creation and the renderer object is in an invalid state.
-  static renderer create(gsl::czstring application_name,
+  static renderer create(gsl::czstring application_name, renderer_options opts,
                          PFN_vkDebugReportCallbackEXT callback,
                          uint32_t push_constant_size,
                          std::error_code& ec) noexcept;
@@ -175,7 +180,9 @@ public:
   std::vector<VkCommandBuffer>
   allocate_command_buffers(uint32_t count, std::error_code& ec) noexcept;
 
-  // Submit a set of command buffers. If ec is true, then an error occurred.
+  // Submit a set of command buffers. onetime indicates that the submit should
+  // use the onetime fence and wait for the submit to complete before
+  // continuing. If ec is true, then an error occurred.
   void submit(gsl::span<VkCommandBuffer> command_buffers, bool onetime,
               std::error_code& ec) noexcept;
 
@@ -245,5 +252,17 @@ private:
   VkCommandPool _graphics_command_pool{VK_NULL_HANDLE};
   VkFence _graphics_onetime_fence{VK_NULL_HANDLE};
 }; // class renderer
+
+inline constexpr auto operator|(renderer_options a,
+                                renderer_options b) noexcept {
+  using U = std::underlying_type_t<renderer_options>;
+  return static_cast<renderer_options>(static_cast<U>(a) | static_cast<U>(b));
+}
+
+inline constexpr auto operator&(renderer_options a,
+                                renderer_options b) noexcept {
+  using U = std::underlying_type_t<renderer_options>;
+  return static_cast<renderer_options>(static_cast<U>(a) & static_cast<U>(b));
+}
 
 #endif // VKST_RENDERER_H
