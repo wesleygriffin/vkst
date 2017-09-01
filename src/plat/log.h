@@ -1,8 +1,8 @@
 #ifndef VKST_PLAT_LOG_H
 #define VKST_PLAT_LOG_H
 
+#include <plat/core.h>
 #include <plat/filesystem.h>
-#include <turf/c/core.h>
 #include <gsl.h>
 #include <string>
 
@@ -32,6 +32,7 @@ inline constexpr gsl::czstring to_string(log_severities severity) noexcept {
   case log_severities::fatal: return "FATAL";
   case log_severities::none: return "NONE";
   }
+  PLAT_MARK_UNREACHABLE;
 }
 
 void log(log_severities severity, gsl::czstring fmt, ...) noexcept;

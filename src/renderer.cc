@@ -123,8 +123,10 @@ std::error_category const& renderer_result_category() {
 
 // Create a Vulkan Instance.
 // https://www.khronos.org/registry/vulkan/specs/1.0-extensions/html/vkspec.html#initialization-instances
-static VkInstance create_instance(gsl::czstring application_name,
-                                  std::error_code& ec) noexcept {
+static VkInstance
+create_instance(gsl::czstring application_name,
+                PFN_vkDebugReportCallbackEXT debug_report_callback,
+                std::error_code& ec) noexcept {
   LOG_ENTER;
   ec.clear();
 
@@ -142,8 +144,7 @@ static VkInstance create_instance(gsl::czstring application_name,
 
 
   // Some extensions are required for graphics: VK_KHR_SURFACE and the
-  // appropriate platform-specific SURFACE_EXTENSION. We also include
-  // VK_EXT_DEBUG_REPORT for debug output messages.
+  // appropriate platform-specific SURFACE_EXTENSION.
   std::array<gsl::czstring, 3> extensions{{
     VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
     VK_KHR_SURFACE_EXTENSION_NAME,
@@ -159,7 +160,7 @@ static VkInstance create_instance(gsl::czstring application_name,
   ainfo.pApplicationName = application_name;
   ainfo.apiVersion = VK_MAKE_VERSION(1, 0, 0); // patch number is ignored; use 0
 
-  VkInstanceCreateInfo cinfo = {};
+  VkInstanceCreateInfo cinfo = {}; // zero all fields
   cinfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   cinfo.pApplicationInfo = &ainfo;
   cinfo.enabledLayerCount = gsl::narrow_cast<uint32_t>(layers.size());
@@ -167,15 +168,21 @@ static VkInstance create_instance(gsl::czstring application_name,
   cinfo.enabledExtensionCount = gsl::narrow_cast<uint32_t>(extensions.size());
   cinfo.ppEnabledExtensionNames = extensions.data();
 
+  VkDebugReportCallbackCreateInfoEXT drccinfo = {}; // zero all fields
+  drccinfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT;
+  drccinfo.flags =
+    VK_DEBUG_REPORT_INFORMATION_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT |
+    VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT |
+    VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_DEBUG_BIT_EXT;
+  drccinfo.pfnCallback = debug_report_callback;
+  cinfo.pNext = &drccinfo;
+
   VkInstance instance;
   VkResult rslt = vkCreateInstance(&cinfo, nullptr, &instance);
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
     return VK_NULL_HANDLE;
   }
-
-  // load the instance-based function pointers
-  vk::load_instance_procs(instance);
 
   LOG_LEAVE;
   return instance;
@@ -191,14 +198,24 @@ create_debug_report_callback(VkInstance instance,
   LOG_ENTER;
   ec.clear();
 
+  // First we need to get a pointer to the extension function
+  auto createDebugReportCallbackEXT =
+    reinterpret_cast<PFN_vkCreateDebugReportCallbackEXT>(
+      vkGetInstanceProcAddr(instance, "vkCreateDebugReportCallbackEXT"));
+  if (!createDebugReportCallbackEXT) {
+    ec.assign(static_cast<int>(vk::result::error_extension_not_present),
+              vk::result_category());
+    return VK_NULL_HANDLE;
+  }
+
   VkDebugReportCallbackCreateInfoEXT drccinfo = {}; // zero all fields
   drccinfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT;
   drccinfo.flags = VK_DEBUG_REPORT_FLAG_BITS_MAX_ENUM_EXT;
   drccinfo.pfnCallback = callback;
 
   VkDebugReportCallbackEXT debug_report_callback;
-  VkResult rslt = vkCreateDebugReportCallbackEXT(instance, &drccinfo, nullptr,
-                                                 &debug_report_callback);
+  VkResult rslt = createDebugReportCallbackEXT(instance, &drccinfo, nullptr,
+                                               &debug_report_callback);
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
     return VK_NULL_HANDLE;
@@ -242,7 +259,9 @@ find_physical(VkInstance instance, renderer_options opts,
   }
 
   VkPhysicalDeviceProperties properties;
+  std::vector<VkExtensionProperties> extensions;
   std::vector<VkQueueFamilyProperties> families;
+  uint32_t count;
 
   // For each device
   for (uint32_t i = 0; i < num_devices; ++i) {
@@ -262,15 +281,38 @@ find_physical(VkInstance instance, renderer_options opts,
     // If this device doesn't have enough push constant memory, skip it.
     if (properties.limits.maxPushConstantsSize < push_constant_size) continue;
 
-    // If this device doesn't supports the swapchain extension, skip it.
-    if (!vk::device_extension_present(device, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
+    // Query the extensions of this device.
+    rslt = vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
+    if (rslt != VK_SUCCESS) {
+      LOG_WARN("unable to query extensions for device (%s); ignoring",
+               vk::result_category().message(rslt).c_str());
+      continue;
+    }
+
+    extensions.resize(count);
+    rslt = vkEnumerateDeviceExtensionProperties(device, nullptr, &count,
+                                                extensions.data());
+    if (rslt != VK_SUCCESS) {
+      LOG_WARN("unable to query extensions for device (%s); ignoring",
+               vk::result_category().message(rslt).c_str());
+      continue;
+    }
+
+    bool found = false;
+    for (auto&& ext : extensions) {
+      if (strcmp(ext.extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME) == 0) {
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
       ec.assign(static_cast<int>(vk::result::error_extension_not_present),
                 vk::result_category());
       continue;
     }
 
     // Query the queue family properties of this device.
-    uint32_t count;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, nullptr);
     families.resize(count);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
@@ -323,11 +365,38 @@ create_device(VkPhysicalDevice physical, uint32_t queue_family_index,
   qcinfo.pQueuePriorities = &priority;
 
   // We must request the VK_KHR_SWAPCHAIN extension.
-  std::array<gsl::czstring, 1> extensions{{VK_KHR_SWAPCHAIN_EXTENSION_NAME}};
+  std::array<gsl::czstring, 1> extensions_requested{
+    {VK_KHR_SWAPCHAIN_EXTENSION_NAME}};
+
+  // Query the extensions of this device.
+  uint32_t num_extensions_present;
+  VkResult rslt = vkEnumerateDeviceExtensionProperties(
+    physical, nullptr, &num_extensions_present, nullptr);
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return {};
+  }
+
+  std::vector<VkExtensionProperties> extensions_present(num_extensions_present);
+  rslt = vkEnumerateDeviceExtensionProperties(
+    physical, nullptr, &num_extensions_present, extensions_present.data());
+  if (rslt != VK_SUCCESS) {
+    ec.assign(rslt, vk::result_category());
+    return {};
+  }
 
   // Verify the physical device supports all of the requested extensions.
-  for (auto&& extension : extensions) {
-    if (!vk::device_extension_present(physical, extension)) {
+  for (auto&& requested : extensions_requested) {
+    bool found = false;
+
+    for (auto&& present : extensions_present) {
+      if (strcmp(present.extensionName, requested) == 0) {
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
       ec.assign(static_cast<int>(vk::result::error_extension_not_present),
                 vk::result_category());
       return {};
@@ -343,19 +412,17 @@ create_device(VkPhysicalDevice physical, uint32_t queue_family_index,
   cinfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   cinfo.queueCreateInfoCount = 1;
   cinfo.pQueueCreateInfos = &qcinfo;
-  cinfo.enabledExtensionCount = gsl::narrow_cast<uint32_t>(extensions.size());
-  cinfo.ppEnabledExtensionNames = extensions.data();
+  cinfo.enabledExtensionCount =
+    gsl::narrow_cast<uint32_t>(extensions_requested.size());
+  cinfo.ppEnabledExtensionNames = extensions_requested.data();
   cinfo.pEnabledFeatures = &features;
 
   VkDevice device;
-  VkResult rslt = vkCreateDevice(physical, &cinfo, nullptr, &device);
+  rslt = vkCreateDevice(physical, &cinfo, nullptr, &device);
   if (rslt != VK_SUCCESS) {
     ec.assign(rslt, vk::result_category());
     return {};
   }
-
-  // load the device-based function pointers
-  vk::load_device_procs(device);
 
   // Get the created graphics queue.
   VkQueue queue;
@@ -410,7 +477,7 @@ static VkFence create_fence(VkDevice device, std::error_code& ec) noexcept {
 } // create_device
 
 renderer renderer::create(gsl::czstring application_name, renderer_options opts,
-                          PFN_vkDebugReportCallbackEXT callback,
+                          PFN_vkDebugReportCallbackEXT debug_report_callback,
                           uint32_t push_constant_size,
                           std::error_code& ec) noexcept {
   LOG_ENTER;
@@ -423,15 +490,11 @@ renderer renderer::create(gsl::czstring application_name, renderer_options opts,
 
   renderer r;
 
-  // Start by initializing the loader. This loads the Vulkan shared library
-  // and initializes the needed non-instance-based function pointers.
-  ec = vk::init_loader();
+  r._instance = ::create_instance(application_name, debug_report_callback, ec);
   if (ec) return r;
 
-  r._instance = ::create_instance(application_name, ec);
-  if (ec) return r;
-
-  r._callback = ::create_debug_report_callback(r._instance, callback, ec);
+  r._callback =
+    ::create_debug_report_callback(r._instance, debug_report_callback, ec);
   if (ec) return r;
 
   std::tie(r._physical, r._graphics_queue_family_index) =
@@ -1682,9 +1745,16 @@ renderer::~renderer() noexcept {
   }
 
   if (_device != VK_NULL_HANDLE) vkDestroyDevice(_device, nullptr);
+
   if (_callback != VK_NULL_HANDLE) {
-    vkDestroyDebugReportCallbackEXT(_instance, _callback, nullptr);
+    auto destroyDebugReportCallbackEXT =
+      reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(
+        vkGetInstanceProcAddr(_instance, "vkDestroyDebugReportCallbackEXT"));
+    if (destroyDebugReportCallbackEXT) {
+      destroyDebugReportCallbackEXT(_instance, _callback, nullptr);
+    }
   }
+
   if (_instance != VK_NULL_HANDLE) vkDestroyInstance(_instance, nullptr);
 
   LOG_LEAVE;

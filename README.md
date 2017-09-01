@@ -10,7 +10,6 @@ Currently only shaders that don't use textures are supported.
 There are four git submodules in ext/ that are required for building:
 - [gsl-lite](https://github.com/martinmoene/gsl-lite)
 - [turf](https://github.com/preshing/turf)
-- [shaderc](https://github.com/google/shaderc)
 - [glm](https://github.com/g-truc/glm)
 
 shaderc is used to enable live shader recompiles (more on that below).

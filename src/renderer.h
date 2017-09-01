@@ -138,7 +138,7 @@ public:
   // Create a new renderer. If ec is true, then an error occurred during
   // creation and the renderer object is in an invalid state.
   static renderer create(gsl::czstring application_name, renderer_options opts,
-                         PFN_vkDebugReportCallbackEXT callback,
+                         PFN_vkDebugReportCallbackEXT debug_report_callback,
                          uint32_t push_constant_size,
                          std::error_code& ec) noexcept;
 
