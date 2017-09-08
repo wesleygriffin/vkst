@@ -47,3 +47,9 @@ target_compile_definitions(st PRIVATE "PROJECT_DIR=\"${PROJECT_SOURCE_DIR}\"")
 target_include_directories(st PRIVATE
     ${GLM_INCLUDE_DIR} ${VULKAN_INCLUDE_DIR} ${TURF_INCLUDE_DIR} ${GSL_INCLUDE_DIR})
 target_link_libraries(st ${SHADERC_LIBRARY} ${VULKAN_LIBRARY})
+
+add_executable(vkinfo WIN32 vkinfo.cc
+    $<TARGET_OBJECTS:plat> $<TARGET_OBJECTS:wsi> $<TARGET_OBJECTS:vk>)
+target_include_directories(vkinfo PRIVATE
+    ${GLM_INCLUDE_DIR} ${VULKAN_INCLUDE_DIR} ${TURF_INCLUDE_DIR} ${GSL_INCLUDE_DIR})
+target_link_libraries(vkinfo ${SHADERC_LIBRARY} ${VULKAN_LIBRARY})
