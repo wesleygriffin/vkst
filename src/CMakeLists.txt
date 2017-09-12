@@ -20,6 +20,7 @@ configure_file(plat/plat_config.h.in plat/plat_config.h)
 add_library(plat OBJECT
     plat/file_handle.cc
     plat/file_io.cc
+    plat/fs_notify_linux.cc
     plat/fs_notify_win32.cc
     plat/log.cc
 )

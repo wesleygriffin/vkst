@@ -38,7 +38,7 @@ else()
         "$ENV{VULKAN_SDK}/lib")
     find_program(GLSLANGVALIDATOR_EXECUTABLE NAMES glslangValidator HINTS
         "$ENV{VULKAN_SDK}/bin")
-    find_library(SHADERC_LIBRARY NAMES shaderc_combined HINTS
+    find_library(SHADERC_LIBRARY NAMES shaderc HINTS
         "$ENV{VULKAN_SDK}/lib")
 endif()
 

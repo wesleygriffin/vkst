@@ -71,7 +71,7 @@ public:
   }
 
   constexpr window() noexcept {}
-  window(rect2d topleft_size) noexcept
+  constexpr window(rect2d topleft_size) noexcept
   : _topleft_size{std::move(topleft_size)} {}
 
 protected:

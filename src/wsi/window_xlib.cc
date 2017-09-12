@@ -1,4 +1,5 @@
 #include "window.h"
+#include <plat/core.h>
 
 #if TURF_KERNEL_LINUX
 #include <cstring>
@@ -192,7 +193,7 @@ wsi::window wsi::window::create(rect2d topleft_size, gsl::czstring title,
                      VisibilityChangeMask | PropertyChangeMask;
 
   error::grab(w._display);
-  auto handle = XCreateWindow(
+  w._handle = XCreateWindow(
     w._display, DefaultRootWindow(w._display), w._topleft_size.offset.x,
     w._topleft_size.offset.y, w._topleft_size.extent.width,
     w._topleft_size.extent.height, 0, DefaultDepth(w._display, screen),

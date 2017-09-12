@@ -29,7 +29,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "C
     set(CMAKE_C_FLAGS_RELEASE "${_common_release}" CACHE STRING "" FORCE)
     set(CMAKE_C_STANDARD_LIBRARIES "${_common_libraries}" CACHE STRING "" FORCE)
 
-    set(CMAKE_CXX_FLAGS "-std=c++14 -fno-rtti -fno-exceptions ${_common}" CACHE STRING "" FORCE)
+    set(CMAKE_CXX_FLAGS "-std=c++1z -fno-rtti -fno-exceptions ${_common}" CACHE STRING "" FORCE)
     if(${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")
         set(CMAKE_CXX_FLAGS "-stdlib=libc++ ${CMAKE_CXX_FLAGS}" CACHE STRING "" FORCE)
     endif()
